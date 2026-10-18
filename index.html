@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AISE Dollar — the official school currency of the American International School in Egypt. 1 AISE$ = 10 EGP.">
+  <meta name="theme-color" content="#0b2a5b">
+  <title>AISE Dollar</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%23c8a24a'/><text x='32' y='43' font-size='30' font-family='Georgia' font-weight='700' text-anchor='middle' fill='%230b2a5b'>A$</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="coin" aria-hidden="true">A$</span>
+      <div>
+        <h1>AISE Dollar</h1>
+        <p>American International School in Egypt</p>
+      </div>
+    </div>
+    <span class="peg" title="Fixed exchange rate">1 AISE$ = 10 EGP</span>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-view="wallet" aria-selected="true">My Wallet</button>
+    <button role="tab" data-view="convert" aria-selected="false">Converter</button>
+    <button role="tab" data-view="bank" aria-selected="false">Bank Office</button>
+  </nav>
+
+  <main id="app" tabindex="-1"></main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <footer class="foot">
+    Data is stored in this browser only. Use <strong>Bank Office → Backup</strong> to export it regularly.
+  </footer>
+
+  <script src="ledger.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
