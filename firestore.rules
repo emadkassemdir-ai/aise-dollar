@@ -1,0 +1,213 @@
+rules_version = '2';
+
+// AISE Dollar — Firestore security rules.
+//
+// There is no server: these rules ARE the bank. Every balance change must be
+// justified by a brand-new, immutable transaction written in the same atomic
+// batch, and the transaction rule checks who is allowed to move what.
+//
+//   wallets/{accountNo}      balance in integer cents (never negative) — private
+//   directory/{accountNo}    name/role/grade only, so people can pick who to pay
+//   transactions/{txId}      append-only ledger (never updated or deleted)
+//   requests/{id}            one-time QR payment requests
+//   users/{uid}              role + account link for each login
+//   logins/{username}        username → sign-in email (public lookup by name only)
+//   config/bank              setup marker + account-number counter
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------ helpers --
+    // Note: $(x) inserts ONE path segment, so collection names are written out literally.
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isUser() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && me().get('disabled', false) == false;
+    }
+    function isBanker() { return isUser() && me().role == 'banker'; }
+    function myAccount() { return me().accountNo; }
+
+    function wallet(acct)      { return get(/databases/$(database)/documents/wallets/$(acct)).data; }
+    function walletAfter(acct) { return getAfter(/databases/$(database)/documents/wallets/$(acct)).data; }
+    function txAfter(id)       { return getAfter(/databases/$(database)/documents/transactions/$(id)).data; }
+    function txIsNew(id) {
+      return !exists(/databases/$(database)/documents/transactions/$(id))
+        && existsAfter(/databases/$(database)/documents/transactions/$(id));
+    }
+
+    // First-run: whoever creates config/bank in this same batch becomes the Bank Office.
+    function bootstrapping() {
+      return signedIn() && !exists(/databases/$(database)/documents/config/bank)
+        && getAfter(/databases/$(database)/documents/config/bank).data.setupBy == request.auth.uid;
+    }
+
+    function isCents(v) { return v is int && v > 0 && v <= 100000000; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // ------------------------------------------------------------- config --
+    match /config/bank {
+      allow read: if true; // the app needs to know whether setup has happened
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['setupBy', 'nextAccount'])
+        && request.resource.data.setupBy == request.auth.uid
+        && request.resource.data.nextAccount == 1002;
+      allow update: if isBanker()
+        && changed().hasOnly(['nextAccount'])
+        && request.resource.data.nextAccount == resource.data.nextAccount + 1;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------- users --
+    function validUser(d) {
+      return d.keys().hasOnly(['username', 'accountNo', 'role', 'mustChange', 'disabled'])
+        && d.username is string && d.accountNo is string
+        && d.role in ['student', 'staff', 'merchant', 'banker']
+        && d.mustChange is bool && d.disabled is bool;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isBanker());
+      allow create: if validUser(request.resource.data) && (
+        isBanker() ||
+        (bootstrapping() && uid == request.auth.uid && request.resource.data.role == 'banker'
+          && request.resource.data.mustChange == false));
+      allow update: if (isBanker() && validUser(request.resource.data))
+        // Users may only clear their own "must change password" flag.
+        || (signedIn() && request.auth.uid == uid
+            && changed().hasOnly(['mustChange']) && request.resource.data.mustChange == false);
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------- logins --
+    match /logins/{username} {
+      allow get: if true;    // look up one username to sign in…
+      allow list: if false;  // …but nobody can download the list of usernames
+      allow create, update: if (isBanker() || bootstrapping())
+        && request.resource.data.keys().hasOnly(['email', 'accountNo'])
+        && request.resource.data.email is string;
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------ wallets --
+    function validWallet(d) {
+      return d.keys().hasOnly(['uid', 'name', 'role', 'grade', 'balance', 'frozen', 'lastTx'])
+        && d.name is string && d.name.size() >= 2 && d.name.size() <= 60
+        && d.grade is string && d.grade.size() <= 20
+        && d.role in ['student', 'staff', 'merchant', 'banker']
+        && d.balance is int && d.balance >= 0
+        && d.frozen is bool && d.uid is string && d.lastTx is string;
+    }
+
+    // A balance change is only valid if it exactly matches a transaction that
+    // is being created in this same batch (so old transactions can't be replayed).
+    function moneyMatches(acct) {
+      let d = request.resource.data;
+      let t = txAfter(d.lastTx);
+      return txIsNew(d.lastTx) && (
+        (t.type in ['deposit', 'transfer'] && t.to == acct && d.balance - resource.data.balance == t.amount) ||
+        (t.type in ['withdraw', 'transfer'] && t.from == acct && resource.data.balance - d.balance == t.amount));
+    }
+
+    match /wallets/{acct} {
+      // Balances are private: only the owner and the Bank Office can see them.
+      allow read: if isBanker() || (isUser() && resource.data.uid == request.auth.uid);
+      allow create: if (isBanker() || bootstrapping())
+        && validWallet(request.resource.data)
+        && request.resource.data.balance == 0 && request.resource.data.frozen == false;
+      allow update: if isUser() && validWallet(request.resource.data) && (
+        // Admin edits (freeze, rename, relink login) never touch money.
+        (isBanker() && changed().hasOnly(['name', 'grade', 'role', 'frozen', 'uid'])) ||
+        // Money moves only together with their transaction.
+        (changed().hasOnly(['balance', 'lastTx']) && moneyMatches(acct)));
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------- directory --
+    match /directory/{acct} {
+      allow read: if isUser();
+      allow create, update: if (isBanker() || bootstrapping())
+        && request.resource.data.keys().hasOnly(['name', 'role', 'grade', 'frozen'])
+        && request.resource.data.name is string && request.resource.data.frozen is bool;
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------- transactions --
+    function bothSidesMove(txId, acct, delta) {
+      return walletAfter(acct).balance == wallet(acct).balance + delta
+        && walletAfter(acct).lastTx == txId;
+    }
+
+    function requestSettled(d, txId) {
+      let before = get(/databases/$(database)/documents/requests/$(d.requestId)).data;
+      let after = getAfter(/databases/$(database)/documents/requests/$(d.requestId)).data;
+      return before.status == 'open'
+        && request.time < before.createdAt + duration.value(15, 'm')
+        && before.merchant == d.to && before.amount == d.amount
+        && after.status == 'paid' && after.paidBy == d.from && after.txId == txId;
+    }
+
+    match /transactions/{txId} {
+      // resource == null: lets the app check "did my payment already go through?"
+      allow read: if resource == null || isBanker() || (isUser() && myAccount() in resource.data.parties);
+      allow update, delete: if false; // the ledger is append-only
+
+      allow create: if isUser()
+        && request.resource.data.keys().hasOnly(['type', 'from', 'to', 'amount', 'memo', 'actor', 'createdAt', 'parties', 'requestId'])
+        && isCents(request.resource.data.amount)
+        && request.resource.data.memo is string && request.resource.data.memo.size() <= 140
+        && request.resource.data.actor == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && (
+          // Cash in at the Bank Office.
+          (request.resource.data.type == 'deposit' && isBanker()
+            && request.resource.data.from == null
+            && request.resource.data.parties == [request.resource.data.to]
+            && !('requestId' in request.resource.data)
+            && bothSidesMove(txId, request.resource.data.to, request.resource.data.amount)) ||
+          // Cash out at the Bank Office.
+          (request.resource.data.type == 'withdraw' && isBanker()
+            && request.resource.data.to == null
+            && request.resource.data.parties == [request.resource.data.from]
+            && !('requestId' in request.resource.data)
+            && bothSidesMove(txId, request.resource.data.from, -request.resource.data.amount)) ||
+          // Person to person: only from YOUR wallet, neither side frozen.
+          (request.resource.data.type == 'transfer'
+            && request.resource.data.from != request.resource.data.to
+            && request.resource.data.parties == [request.resource.data.from, request.resource.data.to]
+            && wallet(request.resource.data.from).uid == request.auth.uid
+            && wallet(request.resource.data.from).frozen == false
+            && wallet(request.resource.data.to).frozen == false
+            && bothSidesMove(txId, request.resource.data.from, -request.resource.data.amount)
+            && bothSidesMove(txId, request.resource.data.to, request.resource.data.amount)
+            && (!('requestId' in request.resource.data) || requestSettled(request.resource.data, txId)))
+        );
+    }
+
+    // ----------------------------------------------------------- requests --
+    match /requests/{id} {
+      allow get: if isUser();
+      allow list: if false;
+
+      allow create: if isUser()
+        && request.resource.data.keys().hasOnly(['merchant', 'merchantName', 'amount', 'memo', 'status', 'createdAt'])
+        && request.resource.data.merchant == myAccount()
+        && request.resource.data.merchantName == wallet(myAccount()).name
+        && isCents(request.resource.data.amount)
+        && request.resource.data.memo is string && request.resource.data.memo.size() <= 140
+        && request.resource.data.status == 'open'
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isUser() && resource.data.status == 'open' && (
+        // The cashier cancels their own code.
+        (resource.data.merchant == myAccount()
+          && changed().hasOnly(['status']) && request.resource.data.status == 'cancelled') ||
+        // A customer pays it — only together with the matching transfer.
+        (changed().hasOnly(['status', 'paidBy', 'paidByName', 'txId'])
+          && request.resource.data.status == 'paid'
+          && request.resource.data.paidBy == myAccount()
+          && request.resource.data.paidByName == wallet(myAccount()).name
+          && txIsNew(request.resource.data.txId)
+          && txAfter(request.resource.data.txId).requestId == id));
+      allow delete: if false;
+    }
+  }
+}

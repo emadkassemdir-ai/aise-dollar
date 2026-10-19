@@ -1,134 +1,110 @@
 # AISE Dollar (AISE$)
 
-The school currency of the **American International School in Egypt**.
+The class currency of the **American International School in Egypt**.
 
-> **1 AISE$ = 10 EGP**, a fixed peg that never changes.
+> **1 AISE$ = 10 EGP**, a fixed rate that never changes.
 
-Everyone at school gets their own login and wallet. You load AISE$ by handing in Egyptian pounds at
-the Bank Office. Then you can send money to friends, pay the canteen by scanning a QR code, and cash
-back out to EGP whenever you like.
+Every student has their own login on their own iPad. They can see their balance, send money to
+friends, and pay the canteen by scanning a QR code. The teacher runs the **Bank Office**: adding
+students, turning EGP cash into AISE$, and cashing back out.
 
-## What it does
+The website is hosted free on **GitHub Pages**. Balances and logins are stored in a free **Firebase**
+database. There's nothing to install, and everything can be set up from an iPad.
 
-| Who | What they can do |
+---
+
+## Set it up (one time, about 15 minutes, all in Safari)
+
+### 1. Create the Firebase database (free, no credit card)
+
+1. Go to **[console.firebase.google.com](https://console.firebase.google.com)** and sign in with a Google account.
+2. Tap **Create a project**, name it `aise-dollar`, turn **off** Google Analytics, then tap **Create project**.
+3. **Turn on logins:** in the left menu choose **Build → Authentication → Get started**. Tap **Email/Password**,
+   switch on the **first** toggle only, and tap **Save**.
+4. **Create the database:** go to **Build → Firestore Database → Create database**. Pick the location **eur3 (Europe)**
+   (closest to Egypt), choose **Start in production mode**, and tap **Create**.
+5. **Add the security rules.** These are what stop anyone faking money:
+   - Open [`firestore.rules`](firestore.rules) in this repo and tap the **Copy raw file** button.
+   - In Firebase, go to **Firestore Database → Rules**, delete everything there, paste, and tap **Publish**.
+6. **Allow the website to connect:** go to **Authentication → Settings → Authorized domains → Add domain** and enter
+   `emadkassemdir-ai.github.io`.
+7. **Get the config:** tap ⚙️ **Project settings**. Under **Your apps**, tap the **`</>`** (Web) button, name it `aise-dollar`,
+   and tap **Register app**. Leave "Firebase Hosting" unticked. Copy the `firebaseConfig = { … }` block it shows.
+8. Put that config into [`firebase-config.js`](firebase-config.js): open the file on GitHub, tap ✏️ **Edit**, and replace `null`
+   with the `{ … }` part you copied. Then tap **Commit changes**.
+   *(Or just paste it to Claude and it'll do this step.)*
+
+### 2. Publish the website on GitHub Pages
+
+1. In this repo, go to **Settings → General → Danger Zone → Change visibility** and choose **Public**.
+   GitHub Pages is free only for public repos. No passwords or student data are stored in the code.
+2. Go to **Settings → Pages**. Under "Build and deployment", choose **Deploy from a branch**, then **`main`** and **`/ (root)`**, and tap **Save**.
+3. Wait 1–2 minutes. Your website is:
+   **https://emadkassemdir-ai.github.io/hetookabiteofabonelesswing/**
+
+### 3. Open the Bank Office
+
+Open the website **right away** and create the **Bank Office** account (your name, a username, and a password).
+The first person to do this becomes the Bank Office, so do it before you share the link.
+
+### 4. Add your class
+
+- **Bank Office → Accounts → Add a whole class:** paste one student per line, like
+  `Omar Hassan, omar.h, 5B`. Add a canteen with `School Canteen, canteen, , merchant`.
+- Tap **Print slips**. Each student gets a slip with their username and a simple first password like `lion482`.
+  The first time they sign in, they make their own password.
+- **Tip for students:** in Safari, tap **Share → Add to Home Screen** and AISE Dollar opens like an app.
+
+---
+
+## How the class uses it
+
+| Who | What they do |
 |---|---|
-| **Students & staff** | Sign in with their own username and password. See their balance in AISE$ and EGP. **Send** money to anyone by name or account number, with a review step before confirming. **Receive** with a personal QR code. **Scan to pay**. Full transaction history. |
-| **Canteen, store & clubs** (merchant accounts) | A **till**: type the price (or tap a quick amount) and a one-time QR code appears. The customer scans it with their phone camera and confirms. The till turns green with a chime and shows who paid. Today's sales total is shown too. |
-| **Bank Office** (banker accounts) | Open accounts one at a time or **bulk import** up to 200 from a spreadsheet paste. Print **login slips** with temporary passwords. **Deposit** EGP cash (exact change worked out). **Cash out** to EGP, which needs the holder's own password. Freeze accounts, reset passwords, view the full **ledger**, export **CSV**. |
-| **Anyone** | AISE$ ⇄ EGP converter. |
+| **Students** | See their balance in AISE$ and EGP. **Send** money to classmates (with a "Review" step before it goes). **Receive** with their own QR code. **Scan to pay** with the iPad Camera app. See their full history. |
+| **Canteen / class shop** (merchant) | Open the **Till**, type the price (or tap 1, 2, 5, 10…), and a QR code appears. The student scans it with their iPad camera and taps **Pay**. The till turns green with a "ka-ching" and shows who paid. Shows today's sales total. |
+| **Teacher** (Bank Office) | Add students and print login slips. **Deposit:** take EGP cash and add AISE$ (it works out the change). **Cash out:** pay EGP back; the student types their own password. **Freeze** an account, make a **New password** for a student who forgot, see the full **Ledger**, download it as **CSV**. |
 
-The Bank Office dashboard always shows the **EGP cash reserve**: AISE$ in circulation × 10. That's
-exactly how much cash should be in the cash box, which makes the daily count a quick check.
+The Bank Office always shows the **EGP cash reserve**: all AISE$ × 10. That's how much cash should be in the cash box.
 
-## Run it
+---
 
-You need **Node.js 22.13 or newer** and nothing else. There are no npm packages to install.
+## Why balances can't be faked
+
+There's no server. The [security rules](firestore.rules) run inside Google's database and check **every** change:
+
+- **Every change must be a recorded payment:** a balance can only change together with a brand-new payment record
+  for **exactly** that amount, in one all-or-nothing step. Balances can never go below zero.
+- **You can only spend your own money,** and only the Bank Office can add or remove money.
+- **Old payments can't be reused:** reusing an old payment's ID to get paid twice is rejected.
+- **The ledger is permanent:** payments can never be edited or deleted, not even by the Bank Office.
+- **Balances are private:** students see only their own balance. Everyone else just sees names.
+- **QR codes are single-use:** each code is used once, expires after 15 minutes, and can't be paid twice even if two iPads scan it at the same moment.
+- **Forgotten passwords:** "New password" switches off the old login completely, and the money stays in the wallet.
+
+These rules are tested by 20 automated attack tests (`tests/rules.test.mjs`): editing your own balance, spending
+someone else's money, sending 1 and crediting 100, replaying an old payment, paying a cancelled or expired QR code,
+promoting yourself to Bank Office, reading other people's balances, and more.
+
+**Free limits:** Firebase's free plan allows 50,000 reads and 20,000 writes a day, which is far more than a school needs.
+New logins are limited to about 100 per hour, so add big groups one class at a time.
+
+---
+
+## For developers
+
+```
+index.html  styles.css  app.js     the website (UI only)
+bank.js                            every Firebase call (data layer)
+money.js                           exact money maths: integer cents, 1 AISE$ = 10 EGP
+firestore.rules                    the security rules = the bank
+firebase-config.js                 your project's public web config
+vendor/qrcode.js                   QR encoder (MIT, Kazuhiko Arase)
+tests/                             money tests + security-rules attack tests
+```
 
 ```bash
-npm start
+npm install
+npm test        # money maths + all security-rules tests (starts the Firestore emulator; needs Java)
+npm run dev     # runs everything locally on fake Firebase: open http://localhost:5000/?emulator
 ```
-
-Then open http://localhost:3000. On the very first start, the server prints a **setup code** in the
-terminal. Enter it on the website to create the first Bank Office account.
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `PORT` | `3000` | Port to listen on |
-| `AISE_DB` | `./data/aise.db` | Where the SQLite database lives. **Back this file up.** |
-| `COOKIE_SECURE` | off | Set to `1` when served over HTTPS |
-| `TRUST_PROXY` | off | Set to `1` behind a reverse proxy (Render, Railway, nginx…) so client IPs and HTTPS are detected |
-| `AISE_SETUP_CODE` | random | Fix the one-time setup code instead of generating one at start-up |
-| `LOG_REQUESTS` | off | Set to `1` to log every API call |
-
-### Put it online (Render, about 5 minutes)
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/emadkassemdir-ai/hetookabiteofabonelesswing)
-
-1. Click the button and sign in to Render with GitHub. Allow Render to see this repository.
-2. Render reads [`render.yaml`](render.yaml) and sets everything up: Node 22, HTTPS, a 1 GB disk for the database,
-   secure cookies, and a random setup code. Click **Apply**.
-3. When it's live, open the service in Render → **Environment** → copy the value of `AISE_SETUP_CODE`.
-4. Visit your new `https://aise-dollar-xxxx.onrender.com` address, paste the setup code, and create the Bank Office account.
-5. Optional: use **Settings → Custom Domains** to give it a name like `bank.yourschool.edu.eg`.
-
-> **Cost:** the database needs a persistent disk, which Render includes only on its paid *Starter* plan (about US$7/month + US$0.25/GB disk).
-> Free plans wipe their files when they restart, which would erase everyone's money, so don't use them for real balances.
-
-Pushing to `main` redeploys automatically. Balances are safe on the disk across redeploys.
-
-### Other hosts
-
-Any host that runs a Docker container **with a persistent disk** works, e.g. Railway, Fly.io, or a small server in the IT room:
-
-```bash
-docker build -t aise-dollar .
-docker run -d -p 3000:3000 -v aise-data:/data -e COOKIE_SECURE=1 -e TRUST_PROXY=1 aise-dollar
-docker logs <container>   # shows the one-time setup code
-```
-
-Always serve it over **HTTPS**. It protects passwords on school Wi-Fi, and phone cameras need it for in-app QR
-scanning. Students can then use **Add to Home Screen** to install it like an app.
-
-> GitHub Pages can't run this, because it needs a server to keep everyone's balances in one place.
-
-**Backups:** download the database file (`AISE_DB`) regularly. On Render, use the service's **Shell** tab:
-`sqlite3 /var/data/aise.db ".backup /var/data/backup.db"`, or the CSV export in the Bank Office.
-
-## Security
-
-- **Passwords** are hashed with **scrypt** (memory-hard), with a unique salt per user and constant-time comparison.
-  New accounts get a readable temporary password (e.g. `kite-7mr4-wave3`) and **must change it** on first sign-in.
-- **Sessions** use a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie (`__Host-` prefixed on HTTPS).
-  Only a SHA-256 of the token is stored, so a leaked database can't be used to log in.
-  Sessions expire after 30 min idle or 12 h at most. Changing your password signs out your other devices.
-  Freezing an account signs it out immediately.
-- **Brute force:** 5 wrong passwords lock that username *and* that IP. Each further lockout doubles the wait (1 min, 2 min, 4 min…).
-  Response times are the same whether or not a username exists.
-- **CSRF:** strict same-site cookies, plus a required custom header and an `Origin` check on every change.
-- **XSS:** a strict Content-Security-Policy with no inline scripts or styles, and all user text is rendered as text, never HTML.
-- **Least privilege:** Bank Office routes check the role on the server. A banker can't cash out someone's money without that person's password.
-  Every ledger entry records **who pressed the button**.
-- **QR safety:** payment codes are unguessable, single-use and expire after 15 minutes. The in-app scanner only follows links to this site.
-
-## How the money stays correct
-
-- **Integer cents only:** `"0.29"` is parsed straight from the text to `29`. Floating-point rounding never touches a balance.
-- **Append-only ledger:** balances are *calculated* from the transaction log, never stored. SQLite triggers block any `UPDATE` or `DELETE` on transactions,
-  and `CHECK` constraints reject negative amounts and malformed entries.
-- **No double-spending:** every payment runs in a `BEGIN IMMEDIATE` transaction that checks the balance and writes the entry atomically.
-  A test fires 10 simultaneous payments at an account that can only afford 3, and exactly 3 succeed.
-- **No double charges:** each Send/Deposit/Cash-out carries an idempotency key, so a double-tap or a retry on flaky Wi-Fi is processed once.
-  A QR code can be paid only once, even if two phones scan it at the same moment.
-
-## Project layout
-
-```
-server/
-  index.js     start-up, setup code, graceful shutdown
-  app.js       HTTP routes, auth checks, CSRF, security headers, static files
-  bank.js      every money movement (deposit, transfer, QR requests, cash-out)
-  auth.js      scrypt passwords, sessions, login throttling
-  db.js        SQLite schema and constraints (node:sqlite, built into Node)
-shared/
-  money.js     exact money parsing/formatting, used by server and browser
-public/
-  index.html, app.js, styles.css   single-page app, mobile-first, dark mode
-  vendor/qrcode.js                 QR encoder (MIT, Kazuhiko Arase)
-tests/         node --test suites: money maths + full HTTP API
-```
-
-## Tests
-
-```bash
-npm test
-```
-
-The tests cover:
-- setup and login
-- lockouts and forced password changes
-- deposits, transfers and cash-outs
-- overdrafts and frozen accounts
-- concurrent double-spend attempts
-- QR double-pay races
-- CSRF rejection, bank-only access and the append-only ledger
-- CSV export, bulk import, and static-file hardening

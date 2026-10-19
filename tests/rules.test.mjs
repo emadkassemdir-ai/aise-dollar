@@ -1,0 +1,232 @@
+// Security-rules tests: every way a student might try to fake money.
+// Run with:  npm run test:rules   (starts the Firestore emulator for you)
+import { readFileSync } from 'node:fs';
+import { test, before, after, beforeEach } from 'node:test';
+import {
+  initializeTestEnvironment, assertSucceeds, assertFails,
+} from '@firebase/rules-unit-testing';
+import {
+  doc, getDoc, setDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp,
+  collection, query, where, getDocs, Timestamp, increment,
+} from 'firebase/firestore';
+
+let env;
+
+before(async () => {
+  env = await initializeTestEnvironment({
+    projectId: 'demo-aise',
+    firestore: { rules: readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8'), host: '127.0.0.1', port: 8080 },
+  });
+});
+after(() => env.cleanup());
+
+const PEOPLE = {
+  bank: { acct: 'AISE-1001', role: 'banker', name: 'Ms. Nadia', balance: 0 },
+  omar: { acct: 'AISE-1002', role: 'student', name: 'Omar Hassan', balance: 1000 },
+  layla: { acct: 'AISE-1003', role: 'student', name: 'Layla Farouk', balance: 0 },
+  canteen: { acct: 'AISE-1004', role: 'merchant', name: 'School Canteen', balance: 0 },
+};
+
+beforeEach(async () => {
+  await env.clearFirestore();
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'config/bank'), { setupBy: 'bank', nextAccount: 1005 });
+    for (const [uid, p] of Object.entries(PEOPLE)) {
+      await setDoc(doc(db, `users/${uid}`), { username: uid, accountNo: p.acct, role: p.role, mustChange: false, disabled: false });
+      await setDoc(doc(db, `wallets/${p.acct}`), { uid, name: p.name, role: p.role, grade: '', balance: p.balance, frozen: false, lastTx: '' });
+      await setDoc(doc(db, `directory/${p.acct}`), { name: p.name, role: p.role, grade: '', frozen: false });
+      await setDoc(doc(db, `logins/${uid}`), { email: `${uid}@aise-dollar.app`, accountNo: p.acct });
+    }
+  });
+});
+
+const as = (uid) => env.authenticatedContext(uid).firestore();
+let n = 0;
+const newId = () => `tx${++n}${Date.now()}`;
+
+function transfer(db, { uid, from, to, amount, debit = amount, credit = amount, fromBal, toBal, txId = newId(), requestId }) {
+  const batch = writeBatch(db);
+  batch.set(doc(db, `transactions/${txId}`), {
+    type: 'transfer', from, to, amount, memo: '', actor: uid, createdAt: serverTimestamp(),
+    parties: [from, to], ...(requestId && { requestId }),
+  });
+  batch.update(doc(db, `wallets/${from}`), { balance: fromBal - debit, lastTx: txId });
+  batch.update(doc(db, `wallets/${to}`), { balance: toBal + credit, lastTx: txId });
+  return { commit: () => batch.commit(), batch, txId };
+}
+
+test('a normal transfer from your own wallet works', async () => {
+  const db = as('omar');
+  await assertSucceeds(transfer(db, { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 250, fromBal: 1000, toBal: 0 }).commit());
+});
+
+test('cannot overdraw', async () => {
+  await assertFails(transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 1001, fromBal: 1000, toBal: 0 }).commit());
+});
+
+test("cannot spend someone else's money", async () => {
+  await assertFails(transfer(as('layla'), { uid: 'layla', from: 'AISE-1002', to: 'AISE-1003', amount: 500, fromBal: 1000, toBal: 0 }).commit());
+});
+
+test('cannot just edit your own balance', async () => {
+  const db = as('layla');
+  await assertFails(updateDoc(doc(db, 'wallets/AISE-1003'), { balance: 999999 }));
+  await assertFails(updateDoc(doc(db, 'wallets/AISE-1003'), { balance: 999999, lastTx: 'made-up' }));
+});
+
+test('cannot send 1 cent but credit 100', async () => {
+  await assertFails(transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 1, credit: 100, fromBal: 1000, toBal: 0 }).commit());
+});
+
+test('cannot replay an old transaction to get paid twice', async () => {
+  const t = transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100, fromBal: 1000, toBal: 0 });
+  await assertSucceeds(t.commit());
+  const layla = as('layla');
+  await updateDoc(doc(layla, 'wallets/AISE-1003'), { balance: 200, lastTx: 'reset' }).catch(() => {});
+  await assertFails(updateDoc(doc(layla, 'wallets/AISE-1003'), { balance: 200, lastTx: t.txId }));
+});
+
+test('cannot pay into a different wallet than the transaction says', async () => {
+  const db = as('omar');
+  const txId = newId();
+  const batch = writeBatch(db);
+  batch.set(doc(db, `transactions/${txId}`), { type: 'transfer', from: 'AISE-1002', to: 'AISE-1003', amount: 100, memo: '', actor: 'omar', createdAt: serverTimestamp(), parties: ['AISE-1002', 'AISE-1003'] });
+  batch.update(doc(db, 'wallets/AISE-1002'), { balance: 900, lastTx: txId });
+  batch.update(doc(db, 'wallets/AISE-1004'), { balance: 100, lastTx: txId });
+  await assertFails(batch.commit());
+});
+
+test('only the Bank Office can create money (deposit)', async () => {
+  const deposit = (db, uid) => {
+    const txId = newId();
+    const batch = writeBatch(db);
+    batch.set(doc(db, `transactions/${txId}`), { type: 'deposit', from: null, to: 'AISE-1003', amount: 5000, memo: '', actor: uid, createdAt: serverTimestamp(), parties: ['AISE-1003'] });
+    batch.update(doc(db, 'wallets/AISE-1003'), { balance: 5000, lastTx: txId });
+    return batch.commit();
+  };
+  await assertFails(deposit(as('layla'), 'layla'));
+  await assertSucceeds(deposit(as('bank'), 'bank'));
+});
+
+test('the ledger cannot be edited or deleted, even by the Bank Office', async () => {
+  const t = transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100, fromBal: 1000, toBal: 0 });
+  await t.commit();
+  await assertFails(updateDoc(doc(as('bank'), `transactions/${t.txId}`), { amount: 1 }));
+  await assertFails(deleteDoc(doc(as('bank'), `transactions/${t.txId}`)));
+});
+
+test("you can read your own history but not other people's", async () => {
+  const t = transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100, fromBal: 1000, toBal: 0 });
+  await t.commit();
+  await assertSucceeds(getDoc(doc(as('layla'), `transactions/${t.txId}`)));
+  await assertFails(getDoc(doc(as('canteen'), `transactions/${t.txId}`)));
+  const mine = query(collection(as('layla'), 'transactions'), where('parties', 'array-contains', 'AISE-1003'));
+  await assertSucceeds(getDocs(mine));
+  const snoop = query(collection(as('canteen'), 'transactions'), where('parties', 'array-contains', 'AISE-1003'));
+  await assertFails(getDocs(snoop));
+});
+
+test('frozen accounts cannot pay or be paid', async () => {
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'wallets/AISE-1003'), { frozen: true }));
+  await assertFails(transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100, fromBal: 1000, toBal: 0 }).commit());
+});
+
+test('a disabled (old) login cannot spend', async () => {
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'users/omar'), { disabled: true }));
+  await assertFails(transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100, fromBal: 1000, toBal: 0 }).commit());
+});
+
+test('QR request: pay once with the exact amount; no double pay', async () => {
+  const canteen = as('canteen');
+  await assertSucceeds(setDoc(doc(canteen, 'requests/r1'), {
+    merchant: 'AISE-1004', merchantName: 'School Canteen', amount: 300, memo: 'Wrap', status: 'open', createdAt: serverTimestamp(),
+  }));
+
+  const pay = (uid, from, fromBal, amount = 300) => {
+    const db = as(uid);
+    const t = transfer(db, { uid, from, to: 'AISE-1004', amount, fromBal, toBal: 0, requestId: 'r1' });
+    t.batch.update(doc(db, 'requests/r1'), { status: 'paid', paidBy: from, paidByName: PEOPLE[uid].name, txId: t.txId });
+    return t.commit();
+  };
+  await assertFails(pay('omar', 'AISE-1002', 1000, 1)); // wrong amount
+  await assertSucceeds(pay('omar', 'AISE-1002', 1000));
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'wallets/AISE-1003'), { balance: 1000 }));
+  await assertFails(pay('layla', 'AISE-1003', 1000)); // already paid
+});
+
+test('QR request: cannot pay a cancelled or expired code; only the owner cancels', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'requests/old'), { merchant: 'AISE-1004', merchantName: 'School Canteen', amount: 100, memo: '', status: 'open', createdAt: Timestamp.fromMillis(Date.now() - 16 * 60 * 1000) });
+    await setDoc(doc(db, 'requests/c1'), { merchant: 'AISE-1004', merchantName: 'School Canteen', amount: 100, memo: '', status: 'open', createdAt: Timestamp.now() });
+  });
+  const pay = (id) => {
+    const db = as('omar');
+    const t = transfer(db, { uid: 'omar', from: 'AISE-1002', to: 'AISE-1004', amount: 100, fromBal: 1000, toBal: 0, requestId: id });
+    t.batch.update(doc(db, `requests/${id}`), { status: 'paid', paidBy: 'AISE-1002', paidByName: 'Omar Hassan', txId: t.txId });
+    return t.commit();
+  };
+  await assertFails(pay('old'));
+  await assertFails(updateDoc(doc(as('omar'), 'requests/c1'), { status: 'cancelled' }));
+  await assertSucceeds(updateDoc(doc(as('canteen'), 'requests/c1'), { status: 'cancelled' }));
+  await assertFails(pay('c1'));
+});
+
+test("cannot create a request in someone else's name", async () => {
+  await assertFails(setDoc(doc(as('omar'), 'requests/fake'), {
+    merchant: 'AISE-1004', merchantName: 'School Canteen', amount: 300, memo: '', status: 'open', createdAt: serverTimestamp(),
+  }));
+});
+
+test('students cannot promote themselves, but can clear mustChange', async () => {
+  const db = as('omar');
+  await assertFails(updateDoc(doc(db, 'users/omar'), { role: 'banker' }));
+  await assertSucceeds(updateDoc(doc(db, 'users/omar'), { mustChange: false }));
+  await assertFails(setDoc(doc(db, 'wallets/AISE-2000'), { uid: 'omar', name: 'Fake', role: 'student', grade: '', balance: 0, frozen: false, lastTx: '' }));
+});
+
+test('usernames can be looked up one at a time but not listed', async () => {
+  const anon = env.unauthenticatedContext().firestore();
+  await assertSucceeds(getDoc(doc(anon, 'logins/omar')));
+  await assertFails(getDocs(collection(anon, 'logins')));
+  await assertFails(getDoc(doc(anon, 'wallets/AISE-1002')));
+});
+
+test('first-run setup: one person becomes Bank Office, then nobody else can', async () => {
+  await env.clearFirestore();
+  const setup = (uid) => {
+    const db = as(uid);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'config/bank'), { setupBy: uid, nextAccount: 1002 });
+    batch.set(doc(db, `users/${uid}`), { username: uid, accountNo: 'AISE-1001', role: 'banker', mustChange: false, disabled: false });
+    batch.set(doc(db, `logins/${uid}`), { email: `${uid}@aise-dollar.app`, accountNo: 'AISE-1001' });
+    batch.set(doc(db, 'wallets/AISE-1001'), { uid, name: 'Teacher', role: 'banker', grade: '', balance: 0, frozen: false, lastTx: '' });
+    return batch.commit();
+  };
+  await assertSucceeds(setup('teacher'));
+  await assertFails(setup('intruder'));
+});
+
+test('balances are private; the name directory is not', async () => {
+  await assertSucceeds(getDoc(doc(as('omar'), 'wallets/AISE-1002')));
+  await assertFails(getDoc(doc(as('omar'), 'wallets/AISE-1003')));
+  await assertSucceeds(getDoc(doc(as('bank'), 'wallets/AISE-1003')));
+  await assertSucceeds(getDocs(collection(as('omar'), 'directory')));
+  await assertFails(updateDoc(doc(as('omar'), 'directory/AISE-1002'), { name: 'Hacker' }));
+});
+
+test('atomic increments (what the app uses) pass the same checks', async () => {
+  const db = as('omar');
+  const send = (amount) => {
+    const txId = newId();
+    const batch = writeBatch(db);
+    batch.set(doc(db, `transactions/${txId}`), { type: 'transfer', from: 'AISE-1002', to: 'AISE-1003', amount, memo: '', actor: 'omar', createdAt: serverTimestamp(), parties: ['AISE-1002', 'AISE-1003'] });
+    batch.update(doc(db, 'wallets/AISE-1002'), { balance: increment(-amount), lastTx: txId });
+    batch.update(doc(db, 'wallets/AISE-1003'), { balance: increment(amount), lastTx: txId });
+    return batch.commit();
+  };
+  await assertSucceeds(send(600));
+  await assertFails(send(600)); // only 400 left
+  await assertSucceeds(send(400));
+});
