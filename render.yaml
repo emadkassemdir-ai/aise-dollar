@@ -1,0 +1,26 @@
+# One-click deploy on Render: https://render.com/deploy
+# Creates the AISE Dollar website with a persistent disk for the database.
+services:
+  - type: web
+    name: aise-dollar
+    runtime: node
+    plan: starter            # needed for a persistent disk; free instances lose data
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: aise-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: AISE_DB
+        value: /var/data/aise.db
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: AISE_SETUP_CODE   # random one-time code; find it under Environment in Render
+        generateValue: true

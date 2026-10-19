@@ -1,0 +1,15 @@
+{
+  "name": "aise-dollar",
+  "version": "2.0.0",
+  "description": "AISE Dollar — the school currency of the American International School in Egypt (1 AISE$ = 10 EGP).",
+  "private": true,
+  "license": "MIT",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.js\""
+  }
+}
