@@ -1,0 +1,454 @@
+/**
+ * AISE Dollar data layer — every Firebase call lives here.
+ *
+ * There is no server. Money moves in atomic batched writes: a new immutable
+ * transaction plus `increment()` on each wallet. firestore.rules re-checks
+ * every batch (right wallet owner, exact amounts, never below zero), so a
+ * modified copy of this file still can't create money.
+ */
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import {
+  getAuth, initializeAuth, inMemoryPersistence, browserLocalPersistence, connectAuthEmulator,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
+  reauthenticateWithCredential, updatePassword, EmailAuthProvider,
+} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import {
+  getFirestore, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, collection, query,
+  where, limit, startAfter, writeBatch, runTransaction, serverTimestamp, increment, onSnapshot, Timestamp,
+  getCountFromServer,
+} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { firebaseConfig } from './firebase-config.js';
+
+const M = window.Money;
+const EMAIL_DOMAIN = 'aise-dollar.app'; // sign-in emails are internal; nobody is ever emailed
+export const REQUEST_TTL_MS = 15 * 60 * 1000; // must match firestore.rules
+export const ROLES = { student: 'Student', staff: 'Staff', merchant: 'Merchant', banker: 'Bank Office' };
+
+export class BankError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'BankError';
+  }
+}
+
+// ================================================================ init ===
+
+/** `?emulator` on localhost talks to the local Firebase emulators (development). */
+const useEmulator = ['localhost', '127.0.0.1'].includes(location.hostname) &&
+  new URLSearchParams(location.search).has('emulator');
+const config = useEmulator ? { apiKey: 'demo-key', projectId: 'demo-aise', authDomain: 'demo-aise.firebaseapp.com' } : firebaseConfig;
+
+export const configured = Boolean(config?.apiKey && config?.projectId);
+
+let app, auth, db;
+if (configured) {
+  app = initializeApp(config);
+  auth = initializeAuth(app, { persistence: browserLocalPersistence });
+  db = getFirestore(app);
+  if (useEmulator) {
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  }
+}
+
+/**
+ * Creating or checking another person's login with the client SDK would sign
+ * the Bank Office out. A throwaway second app with in-memory auth avoids that.
+ */
+async function withSecondaryAuth(fn) {
+  const second = initializeApp(config, `helper-${Date.now()}-${Math.random()}`);
+  const secondAuth = initializeAuth(second, { persistence: inMemoryPersistence });
+  if (useEmulator) connectAuthEmulator(secondAuth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  try {
+    return await fn(secondAuth);
+  } finally {
+    await signOut(secondAuth).catch(() => {});
+    await deleteApp(second).catch(() => {});
+  }
+}
+
+// ============================================================ helpers ===
+
+const ref = (path) => doc(db, path);
+const cleanText = (v, max) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
+const emailFor = (username, suffix = '') => `${username}${suffix}@${EMAIL_DOMAIN}`;
+
+function cleanUsername(raw) {
+  const u = cleanText(raw, 40).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(u)) {
+    throw new BankError('Username must be 3–40 characters: letters, numbers, dot, dash or underscore.');
+  }
+  return u;
+}
+
+function validatePassword(pw) {
+  if (typeof pw !== 'string' || pw.length < 6) throw new BankError('Password must be at least 6 characters.');
+  if (!/[a-z]/i.test(pw) || !/\d/.test(pw)) throw new BankError('Password needs at least one letter and one number.');
+}
+
+/** Easy for a 10-year-old to type once: "lion482". They change it on first sign-in. */
+export function temporaryPassword() {
+  const words = ['lion', 'kite', 'nile', 'palm', 'wave', 'star', 'moon', 'sand', 'reef', 'hawk',
+    'leaf', 'rain', 'gold', 'pine', 'rose', 'tide', 'dune', 'bird', 'sun', 'camel'];
+  const r = crypto.getRandomValues(new Uint32Array(2));
+  return `${words[r[0] % words.length]}${String(r[1] % 1000).padStart(3, '0')}`;
+}
+
+/**
+ * Transaction ids sort NEWEST FIRST by name, so "latest history" is a plain
+ * query with no composite index to set up in the Firebase console.
+ */
+export function newTxId() {
+  const inverted = (8e12 - Date.now()).toString(36).padStart(9, '0');
+  const rand = [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(36).padStart(2, '0')).join('');
+  return `${inverted}-${rand}`;
+}
+
+function friendlyAuthError(err) {
+  const code = err?.code || '';
+  if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'].includes(code)) {
+    return new BankError('Wrong username or password.');
+  }
+  if (code === 'auth/too-many-requests') return new BankError('Too many tries. Wait a few minutes and try again.');
+  if (code === 'auth/network-request-failed') return new BankError('No internet connection. Check Wi-Fi and try again.');
+  if (code === 'auth/weak-password') return new BankError('Password must be at least 6 characters.');
+  if (code === 'auth/requires-recent-login') return new BankError('Please sign out and in again, then retry.');
+  return err;
+}
+
+function friendlyDbError(err) {
+  if (err?.code === 'permission-denied') return new BankError('Not allowed. Check the amount and your balance, then try again.');
+  if (err?.code === 'unavailable') return new BankError('No internet connection. Check Wi-Fi and try again.');
+  return err;
+}
+
+async function guard(fn) {
+  try { return await fn(); } catch (err) { throw err instanceof BankError ? err : friendlyDbError(friendlyAuthError(err)); }
+}
+
+// ============================================================== setup ===
+
+export async function needsSetup() {
+  return !(await getDoc(ref('config/bank'))).exists();
+}
+
+/** First run: create the Bank Office login and wallet AISE-1001. */
+export function setup({ name, username, password }) {
+  return guard(async () => {
+    name = cleanText(name, 60);
+    username = cleanUsername(username);
+    if (name.length < 2) throw new BankError('Name must be at least 2 characters.');
+    validatePassword(password);
+    const { user } = await createUserWithEmailAndPassword(auth, emailFor(username), password);
+    const batch = writeBatch(db);
+    batch.set(ref('config/bank'), { setupBy: user.uid, nextAccount: 1002 });
+    batch.set(ref(`users/${user.uid}`), { username, accountNo: 'AISE-1001', role: 'banker', mustChange: false, disabled: false });
+    batch.set(ref(`logins/${username}`), { email: emailFor(username), accountNo: 'AISE-1001' });
+    batch.set(ref('wallets/AISE-1001'), { uid: user.uid, name, role: 'banker', grade: '', balance: 0, frozen: false, lastTx: '' });
+    batch.set(ref('directory/AISE-1001'), { name, role: 'banker', grade: '', frozen: false });
+    await batch.commit();
+  });
+}
+
+// =============================================================== auth ===
+
+export const ready = () => (configured ? auth.authStateReady() : Promise.resolve());
+export const signedIn = () => Boolean(auth?.currentUser);
+
+export function login(username, password) {
+  return guard(async () => {
+    const name = cleanText(username, 40).toLowerCase();
+    const login = name && /^[a-z0-9._-]+$/.test(name) ? await getDoc(ref(`logins/${name}`)) : null;
+    if (!login?.exists()) throw new BankError('Wrong username or password.');
+    await signInWithEmailAndPassword(auth, login.data().email, String(password ?? ''));
+    return me();
+  });
+}
+
+export const logout = () => (auth ? signOut(auth) : Promise.resolve());
+
+/** The signed-in person: login record + their private wallet. */
+export function me() {
+  return guard(async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return null;
+    const userSnap = await getDoc(ref(`users/${uid}`));
+    if (!userSnap.exists() || userSnap.data().disabled) {
+      await signOut(auth);
+      throw new BankError('This login was replaced. Use the new password from the Bank Office.');
+    }
+    const u = userSnap.data();
+    const w = (await getDoc(ref(`wallets/${u.accountNo}`))).data();
+    return {
+      uid, username: u.username, accountNo: u.accountNo, role: u.role, mustChange: u.mustChange,
+      name: w.name, grade: w.grade, balance: w.balance, frozen: w.frozen,
+    };
+  });
+}
+
+export function changePassword(current, next) {
+  return guard(async () => {
+    validatePassword(next);
+    if (next === current) throw new BankError('Choose a different password.');
+    const user = auth.currentUser;
+    try {
+      await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, current));
+    } catch (err) {
+      if (err?.code === 'auth/too-many-requests') throw friendlyAuthError(err);
+      throw new BankError('Current password is wrong.');
+    }
+    await updatePassword(user, next);
+    await updateDoc(ref(`users/${user.uid}`), { mustChange: false });
+  });
+}
+
+// ========================================================== directory ===
+
+/** Everyone you can pay: names only, never balances. */
+export function directory() {
+  return guard(async () => (await getDocs(collection(db, 'directory'))).docs
+    .map((d) => ({ accountNo: d.id, ...d.data() }))
+    .sort((a, b) => a.name.localeCompare(b.name)));
+}
+
+// ======================================================== transactions ===
+
+function txView(snap, perspective) {
+  const t = snap.data();
+  return {
+    id: snap.id, type: t.type, amount: t.amount, memo: t.memo, from: t.from, to: t.to,
+    at: t.createdAt?.toDate?.() || new Date(), viaQr: Boolean(t.requestId),
+    ...(perspective && { delta: t.to === perspective ? t.amount : -t.amount }),
+    _snap: snap,
+  };
+}
+
+/** Newest first (see newTxId). Pass the last item back as `after` for the next page. */
+export function history(accountNo, { pageSize = 25, after } = {}) {
+  return guard(async () => {
+    const parts = [where('parties', 'array-contains', accountNo), limit(pageSize)];
+    if (after) parts.push(startAfter(after._snap));
+    const snap = await getDocs(query(collection(db, 'transactions'), ...parts));
+    return snap.docs.map((d) => txView(d, accountNo));
+  });
+}
+
+/** Commit a money batch exactly once, even if the network drops mid-way. */
+async function commitOnce(batch, txId) {
+  try {
+    await batch.commit();
+  } catch (err) {
+    // If the write actually landed before the error, treat it as success.
+    const landed = await getDoc(ref(`transactions/${txId}`)).then((s) => s.exists()).catch(() => false);
+    if (!landed) throw err;
+  }
+}
+
+function moneyBatch({ txId, type, from = null, to = null, amount, memo, requestId }) {
+  M.assertAmount(amount);
+  const batch = writeBatch(db);
+  batch.set(ref(`transactions/${txId}`), {
+    type, from, to, amount, memo: cleanText(memo, 140), actor: auth.currentUser.uid,
+    createdAt: serverTimestamp(), parties: [from, to].filter(Boolean), ...(requestId && { requestId }),
+  });
+  if (from) batch.update(ref(`wallets/${from}`), { balance: increment(-amount), lastTx: txId });
+  if (to) batch.update(ref(`wallets/${to}`), { balance: increment(amount), lastTx: txId });
+  return batch;
+}
+
+export function transfer({ from, to, amount, memo, txId = newTxId() }) {
+  return guard(async () => {
+    if (from === to) throw new BankError("You can't send money to yourself.");
+    const mine = (await getDoc(ref(`wallets/${from}`))).data();
+    if (mine.frozen) throw new BankError('Your account is frozen. Visit the Bank Office.');
+    if (mine.balance < amount) throw new BankError(`Not enough money: you have ${M.formatAise(mine.balance)}.`);
+    const them = await getDoc(ref(`directory/${to}`));
+    if (!them.exists()) throw new BankError('No account with that number.');
+    if (them.data().frozen) throw new BankError(`${them.data().name}'s account is frozen.`);
+    await commitOnce(moneyBatch({ txId, type: 'transfer', from, to, amount, memo }), txId);
+    return mine.balance - amount;
+  });
+}
+
+// ===================================================== payment requests ===
+
+export function createRequest({ merchant, merchantName, amount, memo }) {
+  return guard(async () => {
+    M.assertAmount(amount);
+    const id = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    await setDoc(ref(`requests/${id}`), {
+      merchant, merchantName, amount, memo: cleanText(memo, 140), status: 'open', createdAt: serverTimestamp(),
+    });
+    return id;
+  });
+}
+
+function requestView(snap) {
+  if (!snap.exists()) return null;
+  const r = snap.data();
+  const created = r.createdAt?.toMillis?.() ?? Date.now();
+  const expiresAt = created + REQUEST_TTL_MS;
+  const status = r.status === 'open' && Date.now() > expiresAt ? 'expired' : r.status;
+  return { id: snap.id, ...r, status, expiresAt };
+}
+
+export const getRequest = (id) => guard(async () => requestView(await getDoc(ref(`requests/${id}`))));
+
+/** Live updates — the till turns green the instant the customer pays. */
+export function watchRequest(id, onChange) {
+  return onSnapshot(ref(`requests/${id}`), (snap) => onChange(requestView(snap)), () => {});
+}
+
+export function cancelRequest(id) {
+  return guard(() => updateDoc(ref(`requests/${id}`), { status: 'cancelled' }));
+}
+
+export function payRequest({ id, payer, txId = newTxId() }) {
+  return guard(async () => {
+    const r = requestView(await getDoc(ref(`requests/${id}`)));
+    if (!r) throw new BankError('Payment code not found.');
+    if (r.status === 'paid') throw new BankError(r.paidBy === payer.accountNo ? 'You already paid this.' : 'This was already paid.');
+    if (r.status !== 'open') throw new BankError(r.status === 'expired' ? 'This code expired. Ask for a new one.' : 'This code was cancelled.');
+    if (r.merchant === payer.accountNo) throw new BankError("You can't pay your own code.");
+    const mine = (await getDoc(ref(`wallets/${payer.accountNo}`))).data();
+    if (mine.balance < r.amount) throw new BankError(`Not enough money: you have ${M.formatAise(mine.balance)}.`);
+    const batch = moneyBatch({ txId, type: 'transfer', from: payer.accountNo, to: r.merchant, amount: r.amount, memo: r.memo, requestId: id });
+    batch.update(ref(`requests/${id}`), { status: 'paid', paidBy: payer.accountNo, paidByName: payer.name, txId });
+    try {
+      await commitOnce(batch, txId);
+    } catch (err) {
+      const now = requestView(await getDoc(ref(`requests/${id}`)));
+      if (now?.status === 'paid') throw new BankError('Someone else paid this code first.');
+      throw err;
+    }
+    return { request: r, balance: mine.balance - r.amount };
+  });
+}
+
+// ========================================================= bank office ===
+
+export function stats() {
+  return guard(async () => {
+    const wallets = (await getDocs(collection(db, 'wallets'))).docs.map((d) => d.data());
+    const inCirculation = wallets.reduce((s, w) => s + w.balance, 0);
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const [today, count] = await Promise.all([
+      getDocs(query(collection(db, 'transactions'), where('createdAt', '>=', Timestamp.fromDate(startOfDay)))),
+      getCountFromServer(collection(db, 'transactions')),
+    ]);
+    const spentToday = today.docs.map((d) => d.data()).filter((t) => t.type === 'transfer').reduce((s, t) => s + t.amount, 0);
+    return { accounts: wallets.length, inCirculation, egpReserve: M.toEgpCents(inCirculation), spentToday, transactions: count.data().count };
+  });
+}
+
+/** Every account with its balance and username (Bank Office only). */
+export function accounts() {
+  return guard(async () => {
+    const [wallets, users] = await Promise.all([getDocs(collection(db, 'wallets')), getDocs(collection(db, 'users'))]);
+    const byAccount = new Map(users.docs.map((d) => d.data()).filter((u) => !u.disabled).map((u) => [u.accountNo, u]));
+    return wallets.docs
+      .map((d) => ({ accountNo: d.id, ...d.data(), username: byAccount.get(d.id)?.username || '' }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  });
+}
+
+/** Open an account: a login (temporary password) + wallet + directory entry. */
+export function createAccount({ name, username, role = 'student', grade = '' }) {
+  return guard(async () => {
+    name = cleanText(name, 60);
+    username = cleanUsername(username);
+    grade = cleanText(grade, 20);
+    role = String(role || 'student').toLowerCase();
+    if (name.length < 2) throw new BankError('Name must be at least 2 characters.');
+    if (!ROLES[role]) throw new BankError(`Unknown type "${role}". Use student, staff, merchant or banker.`);
+    if ((await getDoc(ref(`logins/${username}`))).exists()) throw new BankError(`Username "${username}" is taken.`);
+
+    const tempPassword = temporaryPassword();
+    const uid = await withSecondaryAuth(async (a) =>
+      (await createUserWithEmailAndPassword(a, emailFor(username), tempPassword)).user.uid);
+
+    const accountNo = await runTransaction(db, async (t) => {
+      const cfg = (await t.get(ref('config/bank'))).data();
+      const acct = `AISE-${cfg.nextAccount}`;
+      t.update(ref('config/bank'), { nextAccount: cfg.nextAccount + 1 });
+      t.set(ref(`users/${uid}`), { username, accountNo: acct, role, mustChange: true, disabled: false });
+      t.set(ref(`logins/${username}`), { email: emailFor(username), accountNo: acct });
+      t.set(ref(`wallets/${acct}`), { uid, name, role, grade, balance: 0, frozen: false, lastTx: '' });
+      t.set(ref(`directory/${acct}`), { name, role, grade, frozen: false });
+      return acct;
+    });
+    return { name, username, accountNo, tempPassword };
+  });
+}
+
+/**
+ * Client apps can't change someone else's Firebase password, so a reset
+ * issues a fresh login for the same wallet and switches the old one off.
+ */
+export function resetPassword(account) {
+  return guard(async () => {
+    const oldUid = account.uid;
+    const oldUser = (await getDoc(ref(`users/${oldUid}`))).data();
+    const tempPassword = temporaryPassword();
+    const suffix = `.r${Date.now().toString(36)}`;
+    const email = emailFor(oldUser.username, suffix);
+    const newUid = await withSecondaryAuth(async (a) => (await createUserWithEmailAndPassword(a, email, tempPassword)).user.uid);
+    const batch = writeBatch(db);
+    batch.update(ref(`users/${oldUid}`), { disabled: true });
+    batch.set(ref(`users/${newUid}`), { ...oldUser, mustChange: true, disabled: false });
+    batch.update(ref(`logins/${oldUser.username}`), { email });
+    batch.update(ref(`wallets/${account.accountNo}`), { uid: newUid });
+    await batch.commit();
+    return { name: account.name, username: oldUser.username, accountNo: account.accountNo, tempPassword };
+  });
+}
+
+export function setFrozen(accountNo, frozen) {
+  return guard(async () => {
+    const batch = writeBatch(db);
+    batch.update(ref(`wallets/${accountNo}`), { frozen });
+    batch.update(ref(`directory/${accountNo}`), { frozen });
+    await batch.commit();
+  });
+}
+
+export function deposit({ to, egpCents, memo, txId = newTxId() }) {
+  return guard(async () => {
+    const { aiseCents, changeEgpCents } = M.egpToAise(egpCents);
+    if (aiseCents <= 0) throw new BankError('Minimum deposit is EGP 0.10.');
+    await commitOnce(moneyBatch({ txId, type: 'deposit', to, amount: aiseCents, memo }), txId);
+    return { aiseCents, changeEgpCents };
+  });
+}
+
+/** Cash out. The account holder types their own password, checked by Firebase. */
+export function withdraw({ account, amount, holderPassword, memo, txId = newTxId() }) {
+  return guard(async () => {
+    if (account.balance < amount) throw new BankError(`${account.name} only has ${M.formatAise(account.balance)}.`);
+    const login = (await getDoc(ref(`logins/${account.username}`))).data();
+    await withSecondaryAuth((a) => signInWithEmailAndPassword(a, login.email, String(holderPassword ?? '')))
+      .catch((err) => { throw err?.code === 'auth/too-many-requests' ? friendlyAuthError(err) : new BankError("The account holder's password is wrong."); });
+    await commitOnce(moneyBatch({ txId, type: 'withdraw', from: account.accountNo, amount, memo }), txId);
+  });
+}
+
+export function ledger({ pageSize = 50, after } = {}) {
+  return guard(async () => {
+    const parts = [limit(pageSize)];
+    if (after) parts.push(startAfter(after._snap));
+    return (await getDocs(query(collection(db, 'transactions'), ...parts))).docs.map((d) => txView(d));
+  });
+}
+
+/** All transactions, oldest first, for the CSV export. */
+export async function allTransactions() {
+  const out = [];
+  let after;
+  for (;;) {
+    const page = await ledger({ pageSize: 500, after });
+    out.push(...page);
+    if (page.length < 500) return out.reverse();
+    after = page[page.length - 1];
+  }
+}

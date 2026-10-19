@@ -146,7 +146,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .ghost-link { color: rgb(255 255 255 / 85%); font-size: 0.9rem; }
 
 /* ---------- wallet ---------- */
-.balance-card { background: linear-gradient(135deg, var(--navy), #1a4a96); color: #fff; border: 0; }
+.balance-card { background: linear-gradient(135deg, var(--navy), #1a4a96); color: #fff; border: 0; grid-column: 1 / -1; }
 .balance-card .muted { color: rgb(255 255 255 / 75%); }
 .balance-card .row { margin-bottom: 14px; align-items: flex-start; }
 .money { display: flex; flex-direction: column; }
@@ -287,3 +287,5 @@ tr.frozen td { opacity: 0.55; }
   .slips-card { border: 0; box-shadow: none; padding: 0; }
   .slip { border-color: #999; }
 }
+
+.steps { text-align: left; margin: 12px auto 16px; padding-left: 1.4em; max-width: 340px; line-height: 1.7; }

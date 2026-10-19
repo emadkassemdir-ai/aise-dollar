@@ -1,15 +1,18 @@
 {
   "name": "aise-dollar",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "AISE Dollar — the school currency of the American International School in Egypt (1 AISE$ = 10 EGP).",
   "private": true,
   "license": "MIT",
-  "main": "server/index.js",
-  "engines": {
-    "node": ">=22.13"
-  },
+  "type": "commonjs",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.js\""
+    "test": "node --test tests/money.test.js && npm run test:rules",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-aise \"node --test tests/rules.test.mjs\"",
+    "dev": "firebase emulators:exec --only auth,firestore --project demo-aise \"npx --yes http-server -p 5000 -c-1 .\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "firebase": "10.14.1",
+    "firebase-tools": "^13.35.1"
   }
 }

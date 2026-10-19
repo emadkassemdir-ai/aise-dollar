@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://*.googleapis.com http://127.0.0.1:9099 http://127.0.0.1:8080; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="AISE Dollar — the school currency of the American International School in Egypt. 1 AISE$ = 10 EGP.">
+  <meta name="theme-color" content="#0b2a5b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="AISE$">
+  <title>AISE Dollar</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <span class="coin" aria-hidden="true">A$</span>
+      <span>
+        <span class="brand-name">AISE Dollar</span>
+        <span class="brand-sub">American International School in Egypt</span>
+      </span>
+    </a>
+    <div class="top-right">
+      <span class="peg" title="Fixed exchange rate">1 AISE$ = 10 EGP</span>
+      <div id="user-area"></div>
+    </div>
+  </header>
+
+  <nav id="nav" class="tabs" aria-label="Sections"></nav>
+
+  <main id="app" tabindex="-1" aria-live="polite">
+    <p class="empty">Loading…</p>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <noscript><p class="empty">AISE Dollar needs JavaScript turned on.</p></noscript>
+
+  <script src="money.js"></script>
+  <script src="vendor/qrcode.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

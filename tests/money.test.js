@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const M = require('../shared/money.js');
+const M = require('../money.js');
 
 test('parseAmount converts text to exact integer cents', () => {
   assert.equal(M.parseAmount('12'), 1200);
