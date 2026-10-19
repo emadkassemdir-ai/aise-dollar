@@ -66,8 +66,11 @@ function createApp({
 
   // ------------------------------------------------------------- helpers ---
 
+  /** Behind a proxy, use the RIGHTMOST X-Forwarded-For entry: it's the one the
+   *  proxy itself appended. Leftmost entries are client-supplied and spoofable,
+   *  which would let an attacker dodge the per-IP login throttle. */
   const clientIp = (req) =>
-    (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) ||
+    (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',').pop().trim()) ||
     req.socket.remoteAddress || 'unknown';
 
   const isSecure = (req) => secureCookies || (trustProxy && req.headers['x-forwarded-proto'] === 'https');

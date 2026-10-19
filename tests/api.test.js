@@ -265,3 +265,17 @@ test('static files are served with security headers; unknown paths are not', asy
   assert.equal((await fetch(`${w.base}/../package.json`)).status, 404);
   await w.close();
 });
+
+test('behind a proxy, a spoofed X-Forwarded-For cannot dodge the IP lockout', async () => {
+  const app = createApp({ setupCode: SETUP_CODE, log: silent, trustProxy: true });
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const attempt = (i) => fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-aise': '1', 'x-forwarded-for': `10.0.0.${i}, 203.0.113.7` },
+    body: JSON.stringify({ username: `victim${i}`, password: 'guess1234' }),
+  });
+  for (let i = 0; i < 5; i++) assert.equal((await attempt(i)).status, 401);
+  assert.equal((await attempt(99)).status, 429, 'same real IP (rightmost) is locked');
+  await new Promise((r) => app.server.close(r));
+});

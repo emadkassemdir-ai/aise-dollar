@@ -37,12 +37,28 @@ terminal. Enter it on the website to create the first Bank Office account.
 | `AISE_DB` | `./data/aise.db` | Where the SQLite database lives. **Back this file up.** |
 | `COOKIE_SECURE` | off | Set to `1` when served over HTTPS |
 | `TRUST_PROXY` | off | Set to `1` behind a reverse proxy (Render, Railway, nginx…) so client IPs and HTTPS are detected |
+| `AISE_SETUP_CODE` | random | Fix the one-time setup code instead of generating one at start-up |
 | `LOG_REQUESTS` | off | Set to `1` to log every API call |
 
-### Deploying for the whole school
+### Put it online (Render, about 5 minutes)
 
-Any host that runs a Docker container **with a persistent disk** works. Examples are Render, Railway,
-Fly.io, or a small server in the IT room:
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/emadkassemdir-ai/hetookabiteofabonelesswing)
+
+1. Click the button and sign in to Render with GitHub. Allow Render to see this repository.
+2. Render reads [`render.yaml`](render.yaml) and sets everything up: Node 22, HTTPS, a 1 GB disk for the database,
+   secure cookies, and a random setup code. Click **Apply**.
+3. When it's live, open the service in Render → **Environment** → copy the value of `AISE_SETUP_CODE`.
+4. Visit your new `https://aise-dollar-xxxx.onrender.com` address, paste the setup code, and create the Bank Office account.
+5. Optional: use **Settings → Custom Domains** to give it a name like `bank.yourschool.edu.eg`.
+
+> **Cost:** the database needs a persistent disk, which Render includes only on its paid *Starter* plan (about US$7/month + US$0.25/GB disk).
+> Free plans wipe their files when they restart, which would erase everyone's money, so don't use them for real balances.
+
+Pushing to `main` redeploys automatically. Balances are safe on the disk across redeploys.
+
+### Other hosts
+
+Any host that runs a Docker container **with a persistent disk** works, e.g. Railway, Fly.io, or a small server in the IT room:
 
 ```bash
 docker build -t aise-dollar .
@@ -50,10 +66,13 @@ docker run -d -p 3000:3000 -v aise-data:/data -e COOKIE_SECURE=1 -e TRUST_PROXY=
 docker logs <container>   # shows the one-time setup code
 ```
 
-Serve it over **HTTPS**. It protects passwords on school Wi-Fi, and phone cameras need it for in-app QR
+Always serve it over **HTTPS**. It protects passwords on school Wi-Fi, and phone cameras need it for in-app QR
 scanning. Students can then use **Add to Home Screen** to install it like an app.
 
-> GitHub Pages can't run this version, because it needs a server to keep everyone's balances in one place.
+> GitHub Pages can't run this, because it needs a server to keep everyone's balances in one place.
+
+**Backups:** download the database file (`AISE_DB`) regularly. On Render, use the service's **Shell** tab:
+`sqlite3 /var/data/aise.db ".backup /var/data/backup.db"`, or the CSV export in the Bank Office.
 
 ## Security
 
