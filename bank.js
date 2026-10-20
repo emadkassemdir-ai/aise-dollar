@@ -10,7 +10,8 @@ import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.
 import {
   getAuth, initializeAuth, inMemoryPersistence, browserLocalPersistence, connectAuthEmulator,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
-  reauthenticateWithCredential, updatePassword, EmailAuthProvider,
+  reauthenticateWithCredential, updatePassword, EmailAuthProvider, GoogleAuthProvider, signInWithPopup,
+  browserPopupRedirectResolver,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
   getFirestore, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, collection, query,
@@ -43,7 +44,8 @@ export const configured = Boolean(config?.apiKey && config?.projectId);
 let app, auth, db;
 if (configured) {
   app = initializeApp(config);
-  auth = initializeAuth(app, { persistence: browserLocalPersistence });
+  // initializeAuth leaves out the popup machinery unless it's passed in explicitly.
+  auth = initializeAuth(app, { persistence: browserLocalPersistence, popupRedirectResolver: browserPopupRedirectResolver });
   db = getFirestore(app);
   if (useEmulator) {
     connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
@@ -132,18 +134,16 @@ export async function needsSetup() {
   return !(await getDoc(ref('config/bank'))).exists();
 }
 
-/** First run: create the Bank Office login and wallet AISE-1001. */
-export function setup({ name, username, password }) {
+/** First run: the signed-in Google user becomes the Bank Office (wallet AISE-1001). */
+export function setup({ name }) {
   return guard(async () => {
     name = cleanText(name, 60);
-    username = cleanUsername(username);
     if (name.length < 2) throw new BankError('Name must be at least 2 characters.');
-    validatePassword(password);
-    const { user } = await createUserWithEmailAndPassword(auth, emailFor(username), password);
+    const user = auth.currentUser;
+    if (!user?.email) throw new BankError('Sign in with Google first.');
     const batch = writeBatch(db);
     batch.set(ref('config/bank'), { setupBy: user.uid, nextAccount: 1002 });
-    batch.set(ref(`users/${user.uid}`), { username, accountNo: 'AISE-1001', role: 'banker', mustChange: false, disabled: false });
-    batch.set(ref(`logins/${username}`), { email: emailFor(username), accountNo: 'AISE-1001' });
+    batch.set(ref(`users/${user.uid}`), { username: user.email.toLowerCase(), accountNo: 'AISE-1001', role: 'banker', mustChange: false, disabled: false });
     batch.set(ref('wallets/AISE-1001'), { uid: user.uid, name, role: 'banker', grade: '', balance: 0, frozen: false, lastTx: '' });
     batch.set(ref('directory/AISE-1001'), { name, role: 'banker', grade: '', frozen: false });
     await batch.commit();
@@ -166,14 +166,59 @@ export function login(username, password) {
 }
 
 export const logout = () => (auth ? signOut(auth) : Promise.resolve());
+export const currentEmail = () => auth?.currentUser?.email || '';
+
+/**
+ * Sign in with a school Google account. Must be called straight from a tap
+ * (before any other await) or Safari blocks the popup.
+ */
+export function signInWithGoogle() {
+  return guard(async () => {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      if (['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(err?.code)) throw new BankError('Sign-in was cancelled.');
+      if (err?.code === 'auth/popup-blocked') throw new BankError('Safari blocked the sign-in window. Tap the button again.');
+      throw err;
+    }
+  });
+}
+
+/** First Google sign-in: link this login to the wallet the Bank Office made for the email. */
+async function claimInvite(user) {
+  const email = (user.email || '').toLowerCase();
+  const isGoogle = user.providerData.some((p) => p.providerId === 'google.com');
+  const invite = isGoogle && email ? await getDoc(ref(`invites/${email}`)).catch(() => null) : null;
+  if (!invite?.exists()) {
+    await signOut(auth);
+    throw new BankError(`${email || 'This account'} isn't in AISE Dollar yet. Ask the Bank Office to add it.`);
+  }
+  const { accountNo, role } = invite.data();
+  const batch = writeBatch(db);
+  batch.set(ref(`users/${user.uid}`), { username: email, accountNo, role, mustChange: false, disabled: false });
+  batch.update(ref(`wallets/${accountNo}`), { uid: user.uid });
+  try {
+    await batch.commit();
+  } catch (err) {
+    await signOut(auth);
+    throw err?.code === 'permission-denied' ? new BankError('This account is already linked. Ask the Bank Office for help.') : err;
+  }
+}
 
 /** The signed-in person: login record + their private wallet. */
 export function me() {
   return guard(async () => {
     const uid = auth.currentUser?.uid;
     if (!uid) return null;
-    const userSnap = await getDoc(ref(`users/${uid}`));
-    if (!userSnap.exists() || userSnap.data().disabled) {
+    let userSnap = await getDoc(ref(`users/${uid}`));
+    if (!userSnap.exists() && !(await needsSetup())) {
+      await claimInvite(auth.currentUser);
+      userSnap = await getDoc(ref(`users/${uid}`));
+    }
+    if (!userSnap.exists()) return { uid, needsSetup: true, email: auth.currentUser.email };
+    if (userSnap.data().disabled) {
       await signOut(auth);
       throw new BankError('This login was replaced. Use the new password from the Bank Office.');
     }
@@ -345,17 +390,35 @@ export function stats() {
 /** Every account with its balance and username (Bank Office only). */
 export function accounts() {
   return guard(async () => {
-    const [wallets, users] = await Promise.all([getDocs(collection(db, 'wallets')), getDocs(collection(db, 'users'))]);
+    const [wallets, users, invites] = await Promise.all([
+      getDocs(collection(db, 'wallets')), getDocs(collection(db, 'users')), getDocs(collection(db, 'invites'))]);
     const byAccount = new Map(users.docs.map((d) => d.data()).filter((u) => !u.disabled).map((u) => [u.accountNo, u]));
+    const invited = new Map(invites.docs.map((d) => [d.data().accountNo, d.id]));
     return wallets.docs
-      .map((d) => ({ accountNo: d.id, ...d.data(), username: byAccount.get(d.id)?.username || '' }))
+      .map((d) => {
+        const w = d.data();
+        const email = invited.get(d.id) || (byAccount.get(d.id)?.username.includes('@') ? byAccount.get(d.id).username : '');
+        return {
+          accountNo: d.id, ...w,
+          username: byAccount.get(d.id)?.username || email,
+          login: email ? 'google' : 'password',
+          claimed: Boolean(w.uid),
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
   });
 }
 
-/** Open an account: a login (temporary password) + wallet + directory entry. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Open an account. With a school email: an invite they claim by signing in
+ * with Google (no password needed). Otherwise: a username + temporary password.
+ */
 export function createAccount({ name, username, role = 'student', grade = '' }) {
   return guard(async () => {
+    const id = cleanText(username, 80).toLowerCase();
+    if (id.includes('@')) return inviteAccount({ name, email: id, role, grade });
     name = cleanText(name, 60);
     username = cleanUsername(username);
     grade = cleanText(grade, 20);
@@ -380,6 +443,26 @@ export function createAccount({ name, username, role = 'student', grade = '' }) 
     });
     return { name, username, accountNo, tempPassword };
   });
+}
+
+async function inviteAccount({ name, email, role, grade }) {
+  name = cleanText(name, 60);
+  grade = cleanText(grade, 20);
+  role = String(role || 'student').toLowerCase();
+  if (!EMAIL_RE.test(email)) throw new BankError(`"${email}" doesn't look like an email address.`);
+  if (name.length < 2) throw new BankError('Name must be at least 2 characters.');
+  if (!ROLES[role]) throw new BankError(`Unknown type "${role}". Use student, staff, merchant or banker.`);
+  if ((await getDoc(ref(`invites/${email}`))).exists()) throw new BankError(`${email} already has an account.`);
+  const accountNo = await runTransaction(db, async (t) => {
+    const cfg = (await t.get(ref('config/bank'))).data();
+    const acct = `AISE-${cfg.nextAccount}`;
+    t.update(ref('config/bank'), { nextAccount: cfg.nextAccount + 1 });
+    t.set(ref(`wallets/${acct}`), { uid: '', name, role, grade, balance: 0, frozen: false, lastTx: '' });
+    t.set(ref(`directory/${acct}`), { name, role, grade, frozen: false });
+    t.set(ref(`invites/${email}`), { accountNo: acct, role });
+    return acct;
+  });
+  return { name, username: email, accountNo, google: true };
 }
 
 /**
@@ -423,12 +506,16 @@ export function deposit({ to, egpCents, memo, txId = newTxId() }) {
 }
 
 /** Cash out. The account holder types their own password, checked by Firebase. */
-export function withdraw({ account, amount, holderPassword, memo, txId = newTxId() }) {
+export function withdraw({ account, amount, holderPassword, present = false, memo, txId = newTxId() }) {
   return guard(async () => {
     if (account.balance < amount) throw new BankError(`${account.name} only has ${M.formatAise(account.balance)}.`);
-    const login = (await getDoc(ref(`logins/${account.username}`))).data();
-    await withSecondaryAuth((a) => signInWithEmailAndPassword(a, login.email, String(holderPassword ?? '')))
-      .catch((err) => { throw err?.code === 'auth/too-many-requests' ? friendlyAuthError(err) : new BankError("The account holder's password is wrong."); });
+    if (account.login === 'password') {
+      const login = (await getDoc(ref(`logins/${account.username}`))).data();
+      await withSecondaryAuth((a) => signInWithEmailAndPassword(a, login.email, String(holderPassword ?? '')))
+        .catch((err) => { throw err?.code === 'auth/too-many-requests' ? friendlyAuthError(err) : new BankError("The account holder's password is wrong."); });
+    } else if (!present) {
+      throw new BankError('Tick the box to confirm the student is here in person.');
+    }
     await commitOnce(moneyBatch({ txId, type: 'withdraw', from: account.accountNo, amount, memo }), txId);
   });
 }

@@ -230,3 +230,53 @@ test('atomic increments (what the app uses) pass the same checks', async () => {
   await assertFails(send(600)); // only 400 left
   await assertSucceeds(send(400));
 });
+
+// ---------------------------------------------------------------- Google sign-in
+
+const google = (uid, email, provider = 'google.com', verified = true) =>
+  env.authenticatedContext(uid, { email, email_verified: verified, firebase: { sign_in_provider: provider } }).firestore();
+
+async function inviteSara() {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'wallets/AISE-1005'), { uid: '', name: 'Sara Adel', role: 'student', grade: '5B', balance: 0, frozen: false, lastTx: '' });
+    await setDoc(doc(db, 'directory/AISE-1005'), { name: 'Sara Adel', role: 'student', grade: '5B', frozen: false });
+    await setDoc(doc(db, 'invites/sara@school.edu.eg'), { accountNo: 'AISE-1005', role: 'student' });
+  });
+}
+
+function claim(db, uid, email, acct = 'AISE-1005', role = 'student') {
+  const batch = writeBatch(db);
+  batch.set(doc(db, `users/${uid}`), { username: email, accountNo: acct, role, mustChange: false, disabled: false });
+  batch.update(doc(db, `wallets/${acct}`), { uid });
+  return batch.commit();
+}
+
+test('Google: a student claims the wallet invited for their school email', async () => {
+  await inviteSara();
+  const db = google('sara-uid', 'sara@school.edu.eg');
+  await assertSucceeds(getDoc(doc(db, 'invites/sara@school.edu.eg')));
+  await assertSucceeds(claim(db, 'sara-uid', 'sara@school.edu.eg'));
+  await assertSucceeds(getDoc(doc(db, 'wallets/AISE-1005')));
+});
+
+test('Google: a password account typing the same email cannot claim it', async () => {
+  await inviteSara();
+  await assertFails(claim(google('fake', 'sara@school.edu.eg', 'password', true), 'fake', 'sara@school.edu.eg'));
+  await assertFails(claim(google('fake2', 'sara@school.edu.eg', 'google.com', false), 'fake2', 'sara@school.edu.eg'));
+});
+
+test("Google: cannot claim someone else's invite, a bigger role, or a claimed wallet", async () => {
+  await inviteSara();
+  await assertFails(claim(google('bad', 'bad@school.edu.eg'), 'bad', 'sara@school.edu.eg'));
+  await assertFails(getDoc(doc(google('bad', 'bad@school.edu.eg'), 'invites/sara@school.edu.eg')));
+  await assertFails(claim(google('sara-uid', 'sara@school.edu.eg'), 'sara-uid', 'sara@school.edu.eg', 'AISE-1005', 'banker'));
+  await assertFails(claim(google('sara-uid', 'sara@school.edu.eg'), 'sara-uid', 'sara@school.edu.eg', 'AISE-1002'));
+  await assertSucceeds(claim(google('sara-uid', 'sara@school.edu.eg'), 'sara-uid', 'sara@school.edu.eg'));
+  await assertFails(claim(google('sara-2', 'sara@school.edu.eg'), 'sara-2', 'sara@school.edu.eg'));
+});
+
+test('Google: only the Bank Office can create invites', async () => {
+  await assertFails(setDoc(doc(as('omar'), 'invites/omar2@school.edu.eg'), { accountNo: 'AISE-1002', role: 'banker' }));
+  await assertSucceeds(setDoc(doc(as('bank'), 'invites/new@school.edu.eg'), { accountNo: 'AISE-1009', role: 'student' }));
+});
