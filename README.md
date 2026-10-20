@@ -4,7 +4,7 @@ The class currency of the **American International School in Egypt**.
 
 > **1 AISE$ = 10 EGP**, a fixed rate that never changes.
 
-Every student has their own login on their own iPad. They can see their balance, send money to
+Every student signs in on their own iPad with **their school Google account**. There are no passwords to hand out. They can see their balance, send money to
 friends, and pay the canteen by scanning a QR code. The teacher runs the **Bank Office**: adding
 students, turning EGP cash into AISE$, and cashing back out.
 
@@ -19,9 +19,11 @@ database. There's nothing to install, and everything can be set up from an iPad.
 
 1. Go to **[console.firebase.google.com](https://console.firebase.google.com)** and sign in with a Google account.
 2. Tap **Create a project**, name it `aise-dollar`, turn **off** Google Analytics, then tap **Create project**.
-3. **Turn on logins:** in the left menu choose **Build → Authentication → Get started**. Tap **Email/Password**,
-   switch on the **first** toggle only, and tap **Save**.
-4. **Create the database:** go to **Build → Firestore Database → Create database**. Pick the location **eur3 (Europe)**
+3. **Turn on logins:** in the left menu choose **Security → Authentication → Get started**. Then:
+   - Tap **Google** and switch on **Enable**. Set the public-facing name to `AISE Dollar`, pick your email as the support email, and tap **Save**.
+   - Tap **Add new provider → Email/Password**, switch on the **first** toggle only, and tap **Save**.
+     This is for accounts with no email, like the canteen iPad.
+4. **Create the database:** go to **Databases & Storage → Firestore Database → Create database**. Pick the location **eur3 (Europe)**
    (closest to Egypt), choose **Start in production mode**, and tap **Create**.
 5. **Add the security rules.** These are what stop anyone faking money:
    - Open [`firestore.rules`](firestore.rules) in this repo and tap the **Copy raw file** button.
@@ -44,15 +46,15 @@ database. There's nothing to install, and everything can be set up from an iPad.
 
 ### 3. Open the Bank Office
 
-Open the website **right away** and create the **Bank Office** account (your name, a username, and a password).
+Open the website **right away**, tap **Sign in with Google to start** with your school account, and type your name.
 The first person to do this becomes the Bank Office, so do it before you share the link.
 
 ### 4. Add your class
 
-- **Bank Office → Accounts → Add a whole class:** paste one student per line, like
-  `Omar Hassan, omar.h, 5B`. Add a canteen with `School Canteen, canteen, , merchant`.
-- Tap **Print slips**. Each student gets a slip with their username and a simple first password like `lion482`.
-  The first time they sign in, they make their own password.
+- **Bank Office → Accounts → Add a whole class:** paste one student per line with their **school email**, like
+  `Omar Hassan, omar.h@school.edu.eg, 5B`. Students just tap **Sign in with Google**, and nothing needs printing.
+- **No email?** For the canteen, write a username instead: `School Canteen, canteen, , merchant`. It gets a printable
+  slip with a simple first password like `lion482`, which is changed on first sign-in.
 - **Tip for students:** in Safari, tap **Share → Add to Home Screen** and AISE Dollar opens like an app.
 
 ---
@@ -63,7 +65,7 @@ The first person to do this becomes the Bank Office, so do it before you share t
 |---|---|
 | **Students** | See their balance in AISE$ and EGP. **Send** money to classmates (with a "Review" step before it goes). **Receive** with their own QR code. **Scan to pay** with the iPad Camera app. See their full history. |
 | **Canteen / class shop** (merchant) | Open the **Till**, type the price (or tap 1, 2, 5, 10…), and a QR code appears. The student scans it with their iPad camera and taps **Pay**. The till turns green with a "ka-ching" and shows who paid. Shows today's sales total. |
-| **Teacher** (Bank Office) | Add students and print login slips. **Deposit:** take EGP cash and add AISE$ (it works out the change). **Cash out:** pay EGP back; the student types their own password. **Freeze** an account, make a **New password** for a student who forgot, see the full **Ledger**, download it as **CSV**. |
+| **Teacher** (Bank Office) | Add students and print login slips. **Deposit:** take EGP cash and add AISE$ (it works out the change). **Cash out:** pay EGP back. A student with a Google login must be there in person; a username account types its password. **Freeze** an account, make a **New password** for a student who forgot, see the full **Ledger**, download it as **CSV**. |
 
 The Bank Office always shows the **EGP cash reserve**: all AISE$ × 10. That's how much cash should be in the cash box.
 
@@ -80,14 +82,16 @@ There's no server. The [security rules](firestore.rules) run inside Google's dat
 - **The ledger is permanent:** payments can never be edited or deleted, not even by the Bank Office.
 - **Balances are private:** students see only their own balance. Everyone else just sees names.
 - **QR codes are single-use:** each code is used once, expires after 15 minutes, and can't be paid twice even if two iPads scan it at the same moment.
-- **Forgotten passwords:** "New password" switches off the old login completely, and the money stays in the wallet.
+- **Only the right student can claim a wallet:** a wallet can only be claimed by a real Google sign-in with that exact school email.
+  Typing the same address into a password account doesn't work.
+- **Forgotten passwords** (username accounts): "New password" switches off the old login completely, and the money stays in the wallet.
 
-These rules are tested by 20 automated attack tests (`tests/rules.test.mjs`): editing your own balance, spending
+These rules are tested by 24 automated attack tests (`tests/rules.test.mjs`): editing your own balance, spending
 someone else's money, sending 1 and crediting 100, replaying an old payment, paying a cancelled or expired QR code,
 promoting yourself to Bank Office, reading other people's balances, and more.
 
 **Free limits:** Firebase's free plan allows 50,000 reads and 20,000 writes a day, which is far more than a school needs.
-New logins are limited to about 100 per hour, so add big groups one class at a time.
+Adding students by email has no limit. Username accounts are limited to about 100 new ones per hour.
 
 ---
 

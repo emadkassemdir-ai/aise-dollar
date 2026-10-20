@@ -50,7 +50,8 @@ function notify(message, kind = 'ok') {
 
 const fmtDate = (d) => d.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const fmtTime = (d) => d.toLocaleTimeString('en-GB', { timeStyle: 'short' });
-const firstName = (name) => name.split(' ')[0];
+/** "Omar Hassan" → "Omar", but "Ms. Nadia" stays "Ms. Nadia". */
+const firstName = (name) => (/^(mr|mrs|ms|miss|dr|mx)\.?$/i.test(name.split(' ')[0]) ? name : name.split(' ')[0]);
 
 function money(cents, cls = '') {
   return h(`div.money${cls}`, h('span.aise', M.formatAise(cents)), h('span.egp', `≈ ${M.formatEgp(cents)}`));
@@ -150,7 +151,10 @@ async function route() {
 
   try {
     await B.ready();
-    if (!state.user && B.signedIn()) await refreshMe().catch(() => (state.user = null));
+    if (!state.user && B.signedIn()) {
+      await refreshMe().catch((err) => { state.user = null; notify(err.message, 'error'); });
+    }
+    if (state.user?.needsSetup && path !== '#/setup') return go('#/setup');
     if (!opts.public) {
       if (!state.user) {
         if (seq !== routeSeq) return;
@@ -175,7 +179,7 @@ async function route() {
 }
 
 function renderChrome() {
-  const u = state.user;
+  const u = state.user?.needsSetup ? null : state.user;
   const signedIn = u && !u.mustChange;
   const hash = (location.hash || '#/').split('?')[0];
   const tabs = [
@@ -210,25 +214,54 @@ function viewNotConfigured() {
     h('p.muted', 'Follow “Connect Firebase” in the README, then paste the config into firebase-config.js.'));
 }
 
+/** "Sign in with Google". signInWithGoogle runs first in the tap so Safari allows the popup. */
+function googleButton(label = 'Sign in with Google') {
+  const button = h('button.google-btn', {
+    type: 'button',
+    onclick: async () => {
+      button.disabled = true;
+      try {
+        await B.signInWithGoogle();
+        state.user = null;
+        await refreshMe();
+        if (state.user?.needsSetup) return go('#/setup');
+        notify(`Welcome, ${firstName(state.user.name)}!`);
+        go(sessionTake('returnTo') || '#/');
+      } catch (err) {
+        state.user = null;
+        renderChrome();
+        notify(err.message, 'error');
+      } finally {
+        button.disabled = false;
+      }
+    },
+  }, h('span.g-logo', { 'aria-hidden': 'true' }, 'G'), label);
+  return button;
+}
+
 async function viewSetup() {
   if (!(await B.needsSetup())) { go('#/login'); return h('div'); }
+  if (!state.user?.needsSetup) {
+    return h('section.card.narrow.login',
+      h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
+      h('h2', 'Set up AISE Dollar'),
+      h('p.muted', 'Sign in with your school Google account. You’ll become the Bank Office and add your class from there.'),
+      googleButton('Sign in with Google to start'));
+  }
   return h('section.card.narrow',
     h('h2', 'Set up AISE Dollar'),
-    h('p.muted', 'Create the Bank Office account. You will open everyone else’s accounts from there.'),
+    h('p.muted', `Signed in as ${state.user.email}. This account becomes the Bank Office.`),
     h('form.stack', {
       onsubmit: onSubmit(async (fd) => {
-        if (fd.get('password') !== fd.get('password2')) throw new B.BankError('Passwords do not match.');
-        await B.setup({ name: fd.get('name'), username: fd.get('username'), password: fd.get('password') });
+        await B.setup({ name: fd.get('name') });
+        state.user = null;
         await refreshMe();
-        notify('Bank Office ready! Now open accounts for your class.');
+        notify('Bank Office ready! Now add your class.');
         go('#/bank/accounts');
       }),
     },
-      field('Your full name', h('input', { name: 'name', required: true, autocomplete: 'name' })),
-      field('Username', h('input', { name: 'username', required: true, autocomplete: 'username', autocapitalize: 'none', spellcheck: false, placeholder: 'e.g. ms.nadia' })),
-      field('Password', passwordInput('password', 'new-password'), 'At least 6 characters with a letter and a number.'),
-      field('Repeat password', passwordInput('password2', 'new-password')),
-      h('button.primary', { type: 'submit' }, 'Create Bank Office account')));
+      field('Your name (as students will see it)', h('input', { name: 'name', required: true, autocomplete: 'name', placeholder: 'e.g. Ms. Nadia' })),
+      h('button.primary', { type: 'submit' }, 'Create Bank Office')));
 }
 
 function viewLogin() {
@@ -236,8 +269,11 @@ function viewLogin() {
   return h('section.card.narrow.login',
     h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
     h('h2', 'Sign in'),
-    h('p.muted', 'Use the username and password on your slip from the Bank Office.'),
-    h('form.stack', {
+    h('p.muted', 'Use your school email.'),
+    googleButton(),
+    h('details.username-login',
+      h('summary', 'No school email? Use a username'),
+      h('form.stack', {
       onsubmit: onSubmit(async (fd) => {
         state.user = await B.login(fd.get('username'), fd.get('password'));
         if (state.user.mustChange) return go('#/password');
@@ -245,10 +281,10 @@ function viewLogin() {
         go(sessionTake('returnTo') || '#/');
       }),
     },
-      field('Username', h('input', { name: 'username', required: true, autocomplete: 'username', autocapitalize: 'none', spellcheck: false, autofocus: true })),
+      field('Username', h('input', { name: 'username', required: true, autocomplete: 'username', autocapitalize: 'none', spellcheck: false })),
       field('Password', passwordInput('password', 'current-password')),
       h('button.primary', { type: 'submit' }, 'Sign in')),
-    h('p.muted.small-print', 'Forgot your password? Ask the Bank Office for a new slip.'));
+      h('p.muted.small-print', 'Forgot your password? Ask the Bank Office for a new slip.')));
 }
 
 function viewPassword() {
@@ -736,11 +772,17 @@ function credentialSlip({ name, username, accountNo, tempPassword }) {
     h('p.muted', `Go to ${location.host}${location.pathname} and sign in. You’ll make your own password.`));
 }
 
-function slipsCard(slips, title) {
+/** Results of adding people: Google accounts need nothing; username accounts get slips. */
+function slipsCard(results, title) {
+  const google = results.filter((r) => r.google);
+  const slips = results.filter((r) => !r.google);
   return h('section.card.span.slips-card',
-    h('div.row', h('h3', title), h('button.primary', { onclick: () => window.print() }, 'Print slips')),
-    h('p.warn', 'These passwords are shown only once. Print them or hand them out now.'),
-    h('div.slips', slips.map(credentialSlip)));
+    h('div.row', h('h3', title), slips.length ? h('button.primary', { onclick: () => window.print() }, 'Print slips') : ''),
+    google.length ? h('div.google-added',
+      h('p', h('strong', `${google.length} can sign in with Google now`), ' — tell them to tap “Sign in with Google” and use their school email:'),
+      h('ul', google.map((g) => h('li', `${g.name} — ${g.username} (${g.accountNo})`)))) : '',
+    slips.length ? h('p.warn', 'These passwords are shown only once. Print them or hand them out now.') : '',
+    slips.length ? h('div.slips', slips.map(credentialSlip)) : '');
 }
 
 async function bankAccounts() {
@@ -760,12 +802,14 @@ async function bankAccounts() {
     const shown = accounts.filter((a) => !q || [a.name, a.username, a.accountNo, a.grade].some((v) => v.toLowerCase().includes(q)));
     tbody.replaceChildren(...shown.map((a) => h(a.frozen ? 'tr.frozen' : 'tr',
       h('td.mono', a.accountNo),
-      h('td', h('strong', a.name), h('div.muted', `@${a.username}${a.grade ? ` · ${a.grade}` : ''}`)),
+      h('td', h('strong', a.name),
+        h('div.muted', `${a.login === 'google' ? a.username : `@${a.username}`}${a.grade ? ` · ${a.grade}` : ''}`),
+        !a.claimed && h('span.badge.pending', 'not signed in yet')),
       h('td', B.ROLES[a.role]),
       h('td.num', M.formatCents(a.balance)),
       h('td', h('div.actions',
         a.accountNo !== state.user.accountNo && h('button.small', { onclick: () => toggleFreeze(a) }, a.frozen ? 'Unfreeze' : 'Freeze'),
-        h('button.small', { onclick: () => resetPassword(a) }, 'New password'))))));
+        a.login === 'password' && h('button.small', { onclick: () => resetPassword(a) }, 'New password'))))));
     count.textContent = q ? `Accounts (${shown.length} of ${accounts.length})` : `All accounts (${accounts.length})`;
     state.refreshBankStats?.();
   }
@@ -800,7 +844,8 @@ async function bankAccounts() {
     }),
   },
     field('Full name', h('input', { name: 'name', required: true, maxLength: 60 })),
-    field('Username', h('input', { name: 'username', required: true, maxLength: 40, autocapitalize: 'none', spellcheck: false, placeholder: 'e.g. omar.h' })),
+    field('School email', h('input', { name: 'username', required: true, maxLength: 80, autocapitalize: 'none', spellcheck: false, inputMode: 'email', placeholder: 'e.g. omar.h@school.edu.eg' }),
+      'No email (like the canteen)? Type a username instead and they get a password slip.'),
     field('Type', h('select', { name: 'role' }, Object.entries(B.ROLES).map(([value, label]) => h('option', { value }, label)))),
     field('Class (optional)', h('input', { name: 'grade', maxLength: 20, placeholder: 'e.g. 5B' })),
     h('button.primary', { type: 'submit' }, 'Open account'));
@@ -809,7 +854,7 @@ async function bankAccounts() {
   const importForm = h('form.stack', {
     onsubmit: onSubmit(async (fd) => {
       const rows = parseCsv(String(fd.get('csv')));
-      if (!rows.length) throw new B.BankError('Paste at least one line: name, username, class, type');
+      if (!rows.length) throw new B.BankError('Paste at least one line: name, email, class, type');
       const ok = [];
       const bad = [];
       for (const [i, row] of rows.entries()) {
@@ -825,8 +870,8 @@ async function bankAccounts() {
     }),
   },
     field('One person per line', h('textarea', { name: 'csv', rows: 5, required: true, spellcheck: false,
-      placeholder: 'Omar Hassan, omar.h, 5B\nLayla Farouk, layla.f, 5B\nSchool Canteen, canteen, , merchant' }),
-      'Format: name, username, class, type (type is student unless you say staff, merchant or banker).'),
+      placeholder: 'Omar Hassan, omar.h@school.edu.eg, 5B\nLayla Farouk, layla.f@school.edu.eg, 5B\nSchool Canteen, canteen, , merchant' }),
+      'Format: name, school email, class, type. Type is student unless you write staff, merchant or banker. No email? Write a username instead.'),
     progress,
     h('button', { type: 'submit' }, 'Create all'));
 
@@ -842,7 +887,7 @@ async function bankAccounts() {
 
 function parseCsv(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-    .filter((l) => !/^name\s*[,;\t]\s*username/i.test(l))
+    .filter((l) => !/^name\s*[,;\t]\s*(username|email)/i.test(l))
     .map((l) => {
       const [name = '', username = '', grade = '', role = ''] = l.split(/[,\t;]/).map((s) => s.trim());
       return { name, username, grade, role: role.toLowerCase() || 'student' };
@@ -892,26 +937,45 @@ async function bankCashout() {
   const accounts = await B.accounts();
   let txId = B.newTxId();
   const picker = recipientPicker(accounts.filter((a) => !a.frozen), { exclude: null, label: 'Account' });
+  const selected = () => accounts.find((a) => a.accountNo === picker.find()?.accountNo);
+
+  // Username accounts prove it's them with their password; Google accounts
+  // have no password here, so the Bank Office confirms they're present.
+  const passwordInput_ = h('input', { name: 'holderPassword', type: 'password', autocomplete: 'off' });
+  const passwordField = field('Account holder’s password', passwordInput_);
+  const presentField = h('label.check-row', h('input', { name: 'present', type: 'checkbox' }), ' The student is here in person');
+  function sync() {
+    const google = selected()?.login === 'google';
+    passwordField.hidden = google;
+    passwordInput_.required = !google;
+    presentField.hidden = !google;
+  }
+  picker.el.addEventListener('input', sync);
+  sync();
+
   return h('section.card.narrow',
     h('h3', 'Cash out to EGP'),
-    h('p.muted', 'The account holder types their own password. Then pay them the EGP shown.'),
+    h('p.muted', 'Take AISE$ out of the wallet, then pay the student the EGP shown.'),
     h('form.stack', {
       onsubmit: onSubmit(async (fd, form) => {
-        const picked = picker.find();
-        if (!picked) throw new B.BankError('Pick an account from the list.');
-        const account = accounts.find((a) => a.accountNo === picked.accountNo);
+        const account = selected();
+        if (!account) throw new B.BankError('Pick an account from the list.');
         const amount = M.parseAmount(fd.get('amount'));
-        await B.withdraw({ account, amount, holderPassword: fd.get('holderPassword'), memo: fd.get('memo'), txId });
+        await B.withdraw({
+          account, amount, holderPassword: fd.get('holderPassword'), present: fd.get('present') === 'on', memo: fd.get('memo'), txId,
+        });
         txId = B.newTxId();
         account.balance -= amount;
         form.reset();
+        sync();
         state.refreshBankStats?.();
         notify(`Done! Pay ${account.name} ${M.formatEgp(amount)} in cash.`);
       }),
     },
       picker.el,
       amountInput(),
-      field('Account holder’s password', h('input', { name: 'holderPassword', type: 'password', required: true, autocomplete: 'off' })),
+      passwordField,
+      presentField,
       field('Note (optional)', h('input', { name: 'memo', maxLength: 140 })),
       h('button.primary', { type: 'submit' }, 'Cash out')));
 }

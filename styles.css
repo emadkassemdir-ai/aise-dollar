@@ -289,3 +289,22 @@ tr.frozen td { opacity: 0.55; }
 }
 
 .steps { text-align: left; margin: 12px auto 16px; padding-left: 1.4em; max-width: 340px; line-height: 1.7; }
+
+/* ---------- Google sign-in ---------- */
+.google-btn {
+  width: 100%; min-height: 54px; margin-top: 16px; font-size: 1.05rem;
+  background: #fff; color: #1f1f1f; border: 1px solid #c7c7c7; border-radius: 12px; gap: 12px;
+}
+.google-btn:hover:not(:disabled) { background: #f6f8fc; }
+.g-logo {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  font: 700 1rem Arial, sans-serif; color: #fff;
+  background: conic-gradient(#ea4335 0 25%, #fbbc05 0 50%, #34a853 0 75%, #4285f4 0);
+}
+.username-login { margin-top: 20px; text-align: left; }
+.username-login summary { cursor: pointer; color: var(--muted); text-align: center; padding: 8px; }
+.username-login form { margin-top: 12px; }
+.check-row { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.check-row input { width: 22px; height: 22px; min-height: 0; }
+.badge.pending { display: inline-block; margin-top: 4px; color: var(--muted); }
+.google-added ul { margin: 8px 0 12px; padding-left: 1.2em; }
