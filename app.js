@@ -171,7 +171,7 @@ async function route() {
     window.scrollTo(0, 0);
   } catch (err) {
     if (seq !== routeSeq) return;
-    console.error(err);
+    if (!(err instanceof B.BankError || err instanceof M.MoneyError)) console.error(err); // expected messages aren't bugs
     app.replaceChildren(h('section.card.narrow',
       h('h2', 'Something went wrong'), h('p.muted', err.message),
       h('button', { onclick: () => route() }, 'Try again')));
@@ -447,15 +447,15 @@ async function viewSend({ params }) {
   return h('div', formCard);
 }
 
-function successCard(title, balance) {
+function successCard(title, balance, { sendAgain = true } = {}) {
   return h('section.card.narrow.success',
     h('div.check', { 'aria-hidden': 'true' }, '✓'),
     h('h2', title),
     balance !== undefined && h('p.muted', `You now have ${M.formatAise(balance)} (${M.formatEgp(balance)})`),
     h('div.row.center-row',
-      h('a.button', { href: '#/' }, 'Back to wallet'),
+      h(sendAgain ? 'a.button' : 'a.button.primary', { href: '#/' }, 'Back to wallet'),
       // go() re-renders even when we're already on #/send (a plain link would do nothing).
-      h('a.button.primary', { href: '#/send', onclick: (e) => { e.preventDefault(); go('#/send'); } }, 'Send again')));
+      sendAgain && h('a.button.primary', { href: '#/send', onclick: (e) => { e.preventDefault(); go('#/send'); } }, 'Send again')));
 }
 
 // ================================================================== QR ===
@@ -645,6 +645,9 @@ async function viewPay({ match }) {
       : { paid: `Already paid${request.paidByName ? ` by ${request.paidByName}` : ''}.`, cancelled: 'This code was cancelled.', expired: 'This code expired. Ask for a new one.' }[request.status];
     return h('section.card.narrow.center', h('h2', 'Can’t pay this code'), h('p.muted', text), h('a.button', { href: '#/' }, 'Back to wallet'));
   }
+  if (request.merchant === state.user.accountNo) {
+    return h('section.card.narrow.center', h('h2', 'This is your own code'), h('p.muted', 'Show it to the customer so they can scan it.'), h('a.button', { href: '#/till' }, 'Back to till'));
+  }
   const short = request.amount > state.user.balance;
   const container = h('div');
   let txId = B.newTxId();
@@ -660,7 +663,7 @@ async function viewPay({ match }) {
         const res = await B.payRequest({ id, payer: state.user, txId });
         txId = B.newTxId();
         state.user.balance = res.balance;
-        container.replaceChildren(successCard(`Paid ${M.formatAise(request.amount)} to ${request.merchantName}`, res.balance));
+        container.replaceChildren(successCard(`Paid ${M.formatAise(request.amount)} to ${request.merchantName}`, res.balance, { sendAgain: false }));
       }),
     },
       h('a.button', { href: '#/' }, 'Cancel'),
@@ -712,7 +715,8 @@ async function viewScan() {
 function isOurLink(text) {
   try {
     const url = new URL(text);
-    return url.origin === location.origin && url.pathname === location.pathname && /^#\/(pay\/[a-f0-9]+|send\?)/.test(url.hash);
+    const page = (p) => p.replace(/index\.html$/, ''); // /repo/ and /repo/index.html are the same page
+    return url.origin === location.origin && page(url.pathname) === page(location.pathname) && /^#\/(pay\/[a-f0-9]+|send\?)/.test(url.hash);
   } catch {
     return false;
   }

@@ -280,3 +280,13 @@ test('Google: only the Bank Office can create invites', async () => {
   await assertFails(setDoc(doc(as('omar'), 'invites/omar2@school.edu.eg'), { accountNo: 'AISE-1002', role: 'banker' }));
   await assertSucceeds(setDoc(doc(as('bank'), 'invites/new@school.edu.eg'), { accountNo: 'AISE-1009', role: 'student' }));
 });
+
+test('nobody can download the whole ledger except the Bank Office', async () => {
+  await transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100, fromBal: 1000, toBal: 0 }).commit();
+  const anon = env.unauthenticatedContext().firestore();
+  await assertFails(getDocs(collection(anon, 'transactions')));
+  await assertFails(getDocs(collection(as('omar'), 'transactions')));
+  await assertFails(getDocs(collection(anon, 'wallets')));
+  await assertFails(getDocs(collection(as('omar'), 'users')));
+  await assertSucceeds(getDocs(collection(as('bank'), 'transactions')));
+});
