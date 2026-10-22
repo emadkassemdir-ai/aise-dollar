@@ -115,7 +115,28 @@ function friendlyAuthError(err) {
   if (code === 'auth/network-request-failed') return new BankError('No internet connection. Check Wi-Fi and try again.');
   if (code === 'auth/weak-password') return new BankError('Password must be at least 6 characters.');
   if (code === 'auth/requires-recent-login') return new BankError('Please sign out and in again, then retry.');
+  // Setup mistakes in the Firebase console: say exactly what to fix.
+  if (code === 'auth/unauthorized-domain') {
+    return new BankError(`Firebase doesn't allow sign-in from ${location.hostname} yet. In Firebase: Authentication → Settings → Authorized domains → add ${location.hostname}.`);
+  }
+  if (code === 'auth/operation-not-allowed') {
+    return new BankError('That sign-in type is switched off. In Firebase: Authentication → Sign-in method → turn on Google and Email/Password.');
+  }
+  if (code.startsWith('auth/api-key') || code === 'auth/invalid-api-key') {
+    return new BankError('firebase-config.js has the wrong apiKey. Copy the config again from Firebase project settings.');
+  }
   return err;
+}
+
+/** Errors that mean the Firestore database itself isn't set up yet. */
+function setupDbError(err) {
+  if (err?.code === 'permission-denied') {
+    return new BankError('The security rules aren’t published yet. In Firebase: Firestore Database → Rules → paste firestore.rules → Publish.');
+  }
+  if (err?.code === 'not-found' || err?.code === 'failed-precondition' || /does not exist/i.test(err?.message || '')) {
+    return new BankError('The Firestore database hasn’t been created yet. In Firebase: Databases & Storage → Firestore Database → Create database.');
+  }
+  return null;
 }
 
 function friendlyDbError(err) {
@@ -130,8 +151,13 @@ async function guard(fn) {
 
 // ============================================================== setup ===
 
+/** config/bank is readable by anyone, so failing here means Firebase itself isn't set up. */
 export async function needsSetup() {
-  return !(await getDoc(ref('config/bank'))).exists();
+  try {
+    return !(await getDoc(ref('config/bank'))).exists();
+  } catch (err) {
+    throw setupDbError(err) || friendlyDbError(err);
+  }
 }
 
 /** First run: the signed-in Google user becomes the Bank Office (wallet AISE-1001). */
@@ -224,6 +250,7 @@ export function me() {
     }
     const u = userSnap.data();
     const w = (await getDoc(ref(`wallets/${u.accountNo}`))).data();
+    if (!w) throw new BankError(`Wallet ${u.accountNo} is missing. Ask the Bank Office for help.`);
     return {
       uid, username: u.username, accountNo: u.accountNo, role: u.role, mustChange: u.mustChange,
       google: u.username.includes('@'), // usernames can't contain @, so this is a Google login
@@ -306,6 +333,7 @@ export function transfer({ from, to, amount, memo, txId = newTxId() }) {
   return guard(async () => {
     if (from === to) throw new BankError("You can't send money to yourself.");
     const mine = (await getDoc(ref(`wallets/${from}`))).data();
+    if (!mine) throw new BankError('Your wallet could not be found. Sign out and in again.');
     if (mine.frozen) throw new BankError('Your account is frozen. Visit the Bank Office.');
     if (mine.balance < amount) throw new BankError(`Not enough money: you have ${M.formatAise(mine.balance)}.`);
     const them = await getDoc(ref(`directory/${to}`));
@@ -357,6 +385,7 @@ export function payRequest({ id, payer, txId = newTxId() }) {
     if (r.status !== 'open') throw new BankError(r.status === 'expired' ? 'This code expired. Ask for a new one.' : 'This code was cancelled.');
     if (r.merchant === payer.accountNo) throw new BankError("You can't pay your own code.");
     const mine = (await getDoc(ref(`wallets/${payer.accountNo}`))).data();
+    if (!mine) throw new BankError('Your wallet could not be found. Sign out and in again.');
     if (mine.balance < r.amount) throw new BankError(`Not enough money: you have ${M.formatAise(mine.balance)}.`);
     const batch = moneyBatch({ txId, type: 'transfer', from: payer.accountNo, to: r.merchant, amount: r.amount, memo: r.memo, requestId: id });
     batch.update(ref(`requests/${id}`), { status: 'paid', paidBy: payer.accountNo, paidByName: payer.name, txId });
@@ -429,15 +458,18 @@ export function createAccount({ name, username, role = 'student', grade = '' }) 
     if ((await getDoc(ref(`logins/${username}`))).exists()) throw new BankError(`Username "${username}" is taken.`);
 
     const tempPassword = temporaryPassword();
+    // A unique hidden sign-in email per account: if a previous attempt created
+    // the Firebase login but failed before saving, the username isn't stuck.
+    const email = emailFor(username, `.${Date.now().toString(36)}`);
     const uid = await withSecondaryAuth(async (a) =>
-      (await createUserWithEmailAndPassword(a, emailFor(username), tempPassword)).user.uid);
+      (await createUserWithEmailAndPassword(a, email, tempPassword)).user.uid);
 
     const accountNo = await runTransaction(db, async (t) => {
       const cfg = (await t.get(ref('config/bank'))).data();
       const acct = `AISE-${cfg.nextAccount}`;
       t.update(ref('config/bank'), { nextAccount: cfg.nextAccount + 1 });
       t.set(ref(`users/${uid}`), { username, accountNo: acct, role, mustChange: true, disabled: false });
-      t.set(ref(`logins/${username}`), { email: emailFor(username), accountNo: acct });
+      t.set(ref(`logins/${username}`), { email, accountNo: acct });
       t.set(ref(`wallets/${acct}`), { uid, name, role, grade, balance: 0, frozen: false, lastTx: '' });
       t.set(ref(`directory/${acct}`), { name, role, grade, frozen: false });
       return acct;
