@@ -226,6 +226,7 @@ export function me() {
     const w = (await getDoc(ref(`wallets/${u.accountNo}`))).data();
     return {
       uid, username: u.username, accountNo: u.accountNo, role: u.role, mustChange: u.mustChange,
+      google: u.username.includes('@'), // usernames can't contain @, so this is a Google login
       name: w.name, grade: w.grade, balance: w.balance, frozen: w.frozen,
     };
   });

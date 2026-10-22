@@ -3,7 +3,7 @@
   "short_name": "AISE$",
   "description": "School currency of the American International School in Egypt. 1 AISE$ = 10 EGP.",
   "start_url": "./",
-  "display": "standalone",
+  "display": "browser",
   "background_color": "#0b2a5b",
   "theme_color": "#0b2a5b",
   "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]

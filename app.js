@@ -288,6 +288,7 @@ function viewLogin() {
 }
 
 function viewPassword() {
+  if (state.user?.google) { go('#/'); return h('div'); } // Google accounts have no AISE password
   const forced = state.user?.mustChange;
   return h('section.card.narrow',
     h('h2', forced ? 'Make your own password' : 'Change password'),
@@ -301,6 +302,8 @@ function viewPassword() {
         go(sessionTake('returnTo') || '#/');
       }),
     },
+      // Lets Safari/Chrome save the new password against the right username.
+      h('input', { type: 'text', name: 'username', autocomplete: 'username', value: state.user?.username || '', hidden: true, readOnly: true }),
       field(forced ? 'Password from your slip' : 'Current password', passwordInput('current', 'current-password')),
       field('New password', passwordInput('next', 'new-password'), 'At least 6 characters with a letter and a number.'),
       field('Type it again', passwordInput('next2', 'new-password')),
@@ -360,7 +363,7 @@ async function viewWallet() {
     h('section.card.balance-card',
       h('div.row',
         h('div', h('p.muted', `${B.ROLES[u.role]} · ${u.accountNo}${u.grade ? ` · ${u.grade}` : ''}`), h('h2', u.name)),
-        h('a.ghost-link', { href: '#/password' }, 'Password')),
+        !u.google && h('a.ghost-link', { href: '#/password' }, 'Password')),
       h('p.muted', 'My balance'),
       money(u.balance, '.big'),
       u.frozen && h('p.warn', 'This account is frozen. Visit the Bank Office.'),
