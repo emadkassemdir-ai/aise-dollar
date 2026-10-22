@@ -55,7 +55,8 @@ The first person to do this becomes the Bank Office, so do it before you share t
   `Omar Hassan, omar.h@school.edu.eg, 5B`. Students just tap **Sign in with Google**, and nothing needs printing.
 - **No email?** For the canteen, write a username instead: `School Canteen, canteen, , merchant`. It gets a printable
   slip with a simple first password like `lion482`, which is changed on first sign-in.
-- **Tip for students:** in Safari, tap **Share → Add to Home Screen** and AISE Dollar opens like an app.
+- **Tip for students:** in Safari, tap **Share → Add to Home Screen** to get an AISE Dollar icon. It opens in Safari,
+  because Google sign-in doesn't work inside full-screen home-screen apps on iPad.
 
 ---
 
