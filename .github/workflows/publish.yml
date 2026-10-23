@@ -1,0 +1,15 @@
+# Keeps the website (the gh-pages branch, served by GitHub Pages) in sync with main.
+name: Publish website
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: publish-website
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git push --force origin HEAD:gh-pages
