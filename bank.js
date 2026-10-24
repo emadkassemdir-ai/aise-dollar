@@ -8,7 +8,7 @@
  */
 import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import {
-  getAuth, initializeAuth, inMemoryPersistence, browserLocalPersistence, connectAuthEmulator,
+  initializeAuth, inMemoryPersistence, onAuthStateChanged, browserLocalPersistence, connectAuthEmulator,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
   reauthenticateWithCredential, updatePassword, EmailAuthProvider, GoogleAuthProvider, signInWithPopup,
   browserPopupRedirectResolver,
@@ -180,6 +180,9 @@ export function setup({ name }) {
 
 export const ready = () => (configured ? auth.authStateReady() : Promise.resolve());
 export const signedIn = () => Boolean(auth?.currentUser);
+/** Calls `fn(isSignedIn)` whenever someone signs in or out — even if the
+ *  sign-in popup itself reported an error (iPad Safari sometimes does). */
+export const onAuthChange = (fn) => (configured ? onAuthStateChanged(auth, (u) => fn(Boolean(u))) : () => {});
 
 export function login(username, password) {
   return guard(async () => {

@@ -222,21 +222,39 @@ function googleButton(label = 'Sign in with Google') {
       button.disabled = true;
       try {
         await B.signInWithGoogle();
-        state.user = null;
-        await refreshMe();
-        if (state.user?.needsSetup) return go('#/setup');
-        notify(`Welcome, ${firstName(state.user.name)}!`);
-        go(sessionTake('returnTo') || '#/');
       } catch (err) {
-        state.user = null;
-        renderChrome();
-        notify(err.message, 'error');
+        // iPad Safari can report a popup error even though Google signed you in.
+        if (!B.signedIn()) {
+          notify(err.message, 'error');
+          return;
+        }
       } finally {
         button.disabled = false;
       }
+      afterSignIn();
     },
   }, h('span.g-logo', { 'aria-hidden': 'true' }, 'G'), label);
   return button;
+}
+
+/** Google said yes: load who this is and go to setup, the wallet, or where they were. */
+let continuing = false;
+async function afterSignIn() {
+  if (continuing) return;
+  continuing = true;
+  try {
+    state.user = null;
+    await refreshMe();
+    if (state.user?.needsSetup) return go('#/setup');
+    notify(`Welcome, ${firstName(state.user.name)}!`);
+    go(sessionTake('returnTo') || '#/');
+  } catch (err) {
+    state.user = null;
+    renderChrome();
+    notify(err.message, 'error');
+  } finally {
+    continuing = false;
+  }
 }
 
 async function viewSetup() {
@@ -265,7 +283,7 @@ async function viewSetup() {
 }
 
 function viewLogin() {
-  if (state.user) { go('#/'); return h('div'); }
+  if (state.user) { go(sessionTake('returnTo') || '#/'); return h('div'); }
   return h('section.card.narrow.login',
     h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
     h('h2', 'Sign in'),
@@ -1018,5 +1036,16 @@ async function exportCsv() {
 // ================================================================= boot ===
 
 window.addEventListener('hashchange', route);
+
+// Follow Google's sign-in state directly: if someone becomes signed in while
+// the sign-in screen is showing, continue — even if the popup itself reported
+// an error or never came back (iPad Safari). The first call is just the
+// page-load state, which route() already handles.
+let authKnown = false;
+B.onAuthChange((isSignedIn) => {
+  if (!authKnown) { authKnown = true; return; }
+  const path = (location.hash || '#/').split('?')[0];
+  if (isSignedIn && !state.user && (path === '#/login' || path === '#/setup')) afterSignIn();
+});
 if (!location.hash) history.replaceState(null, '', `${location.pathname}${location.search}#/`);
 route();
