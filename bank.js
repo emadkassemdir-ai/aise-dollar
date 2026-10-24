@@ -554,7 +554,17 @@ export function resetPassword(account) {
 
 /** Self-join switch: '' = invite only, or a school domain like 'stu.aisegypt.com'. */
 export const getOpenDomain = () => guard(async () => (await getDoc(ref('config/bank'))).data()?.openDomain || '');
-export const setOpenDomain = (domain) => guard(() => updateDoc(ref('config/bank'), { openDomain: domain }));
+export const setOpenDomain = (domain) => guard(async () => {
+  try {
+    await updateDoc(ref('config/bank'), { openDomain: domain });
+  } catch (err) {
+    // Older published rules don't know about this switch yet.
+    if (err?.code === 'permission-denied') {
+      throw new BankError('Firebase is still using the old security rules. Paste the latest firestore.rules into Firestore → Rules → Publish, then try again.');
+    }
+    throw err;
+  }
+});
 
 export function setFrozen(accountNo, frozen) {
   return guard(async () => {
