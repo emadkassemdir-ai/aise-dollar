@@ -346,3 +346,123 @@ test('self-join switch: only the Bank Office can flip it', async () => {
   await assertSucceeds(updateDoc(doc(as('bank'), 'config/bank'), { openDomain: '' }));
   await assertFails(updateDoc(doc(as('omar'), 'config/bank'), { nextAccount: 1006 }));
 });
+
+// ================================================================ attack pack 2: 20 more ways to cheat
+
+/** Build a raw money batch exactly as an attacker could, field by field. */
+function rawTx(db, tx, walletUpdates) {
+  const batch = writeBatch(db);
+  const txId = tx.id || newId();
+  batch.set(doc(db, `transactions/${txId}`), {
+    type: 'transfer', memo: '', createdAt: serverTimestamp(), ...tx.data,
+  });
+  for (const [acct, upd] of Object.entries(walletUpdates)) batch.update(doc(db, `wallets/${acct}`), { lastTx: txId, ...upd });
+  return batch.commit();
+}
+
+test('attack: negative amount (send -500 to pull money from a friend)', async () => {
+  await assertFails(rawTx(as('layla'), { data: { from: 'AISE-1003', to: 'AISE-1002', amount: -500, actor: 'layla', parties: ['AISE-1003', 'AISE-1002'] } },
+    { 'AISE-1003': { balance: 500 }, 'AISE-1002': { balance: 500 } }));
+});
+
+test('attack: zero and fractional amounts', async () => {
+  for (const amount of [0, 0.5, 12.75]) {
+    await assertFails(rawTx(as('omar'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount, actor: 'omar', parties: ['AISE-1002', 'AISE-1003'] } },
+      { 'AISE-1002': { balance: 1000 - amount }, 'AISE-1003': { balance: amount } }));
+  }
+});
+
+test('attack: absurdly huge amount', async () => {
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'wallets/AISE-1002'), { balance: 999999999999 }));
+  await assertFails(transfer(as('omar'), { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 100000001, fromBal: 999999999999, toBal: 0 }).commit());
+});
+
+test('attack: credit yourself without debiting anyone', async () => {
+  await assertFails(rawTx(as('layla'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount: 300, actor: 'layla', parties: ['AISE-1002', 'AISE-1003'] } },
+    { 'AISE-1003': { balance: 300 } }));
+});
+
+test('attack: debit a victim and keep it (only the victim wallet moves)', async () => {
+  await assertFails(rawTx(as('layla'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount: 300, actor: 'layla', parties: ['AISE-1002', 'AISE-1003'] } },
+    { 'AISE-1002': { balance: 700 } }));
+});
+
+test('attack: lie about who pressed the button (actor = someone else)', async () => {
+  await assertFails(rawTx(as('omar'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount: 100, actor: 'bank', parties: ['AISE-1002', 'AISE-1003'] } },
+    { 'AISE-1002': { balance: 900 }, 'AISE-1003': { balance: 100 } }));
+});
+
+test('attack: backdate the transaction (fake createdAt)', async () => {
+  await assertFails(rawTx(as('omar'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount: 100, actor: 'omar', parties: ['AISE-1002', 'AISE-1003'], createdAt: Timestamp.fromMillis(0) } },
+    { 'AISE-1002': { balance: 900 }, 'AISE-1003': { balance: 100 } }));
+});
+
+test('attack: hide from history (parties list leaves out the sender)', async () => {
+  await assertFails(rawTx(as('omar'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount: 100, actor: 'omar', parties: ['AISE-1003'] } },
+    { 'AISE-1002': { balance: 900 }, 'AISE-1003': { balance: 100 } }));
+});
+
+test('attack: student pretends a transfer is a bank deposit', async () => {
+  await assertFails(rawTx(as('layla'), { data: { type: 'deposit', from: null, to: 'AISE-1003', amount: 5000, actor: 'layla', parties: ['AISE-1003'] } },
+    { 'AISE-1003': { balance: 5000 } }));
+});
+
+test('attack: a "withdraw" that actually adds money', async () => {
+  await assertFails(rawTx(as('bank'), { data: { type: 'withdraw', from: 'AISE-1002', to: null, amount: 100, actor: 'bank', parties: ['AISE-1002'] } },
+    { 'AISE-1002': { balance: 1100 } }));
+});
+
+test('attack: smuggle extra fields into a transaction', async () => {
+  await assertFails(rawTx(as('omar'), { data: { from: 'AISE-1002', to: 'AISE-1003', amount: 100, actor: 'omar', parties: ['AISE-1002', 'AISE-1003'], bonus: 99999 } },
+    { 'AISE-1002': { balance: 900 }, 'AISE-1003': { balance: 100 } }));
+});
+
+test('attack: one transaction id used to credit two wallets', async () => {
+  const id = newId();
+  await assertFails(rawTx(as('omar'), { id, data: { from: 'AISE-1002', to: 'AISE-1003', amount: 100, actor: 'omar', parties: ['AISE-1002', 'AISE-1003'] } },
+    { 'AISE-1002': { balance: 900 }, 'AISE-1003': { balance: 100 }, 'AISE-1004': { balance: 100 } }));
+});
+
+test('attack: create a brand-new wallet that already has money', async () => {
+  await assertFails(setDoc(doc(as('omar'), 'wallets/AISE-7777'), { uid: 'omar', name: 'Rich Omar', role: 'student', grade: '', balance: 100000, frozen: false, lastTx: '' }));
+});
+
+test("attack: steal someone's wallet by pointing it at your login", async () => {
+  await assertFails(updateDoc(doc(as('layla'), 'wallets/AISE-1002'), { uid: 'layla' }));
+});
+
+test('attack: unfreeze yourself, or freeze a rival', async () => {
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'wallets/AISE-1003'), { frozen: true }));
+  await assertFails(updateDoc(doc(as('layla'), 'wallets/AISE-1003'), { frozen: false }));
+  await assertFails(updateDoc(doc(as('layla'), 'wallets/AISE-1002'), { frozen: true }));
+});
+
+test('attack: rename someone in the directory, or make yourself "Bank Office"', async () => {
+  await assertFails(updateDoc(doc(as('layla'), 'directory/AISE-1002'), { name: 'Omar the Thief' }));
+  await assertFails(updateDoc(doc(as('layla'), 'directory/AISE-1003'), { role: 'banker' }));
+});
+
+test("attack: read another user's private login record", async () => {
+  await assertFails(getDoc(doc(as('layla'), 'users/omar')));
+});
+
+test("attack: hijack a username by rewriting its sign-in email", async () => {
+  await assertFails(updateDoc(doc(as('layla'), 'logins/omar'), { email: 'layla@aise-dollar.app' }));
+  await assertFails(setDoc(doc(as('layla'), 'logins/newname'), { email: 'layla@aise-dollar.app', accountNo: 'AISE-1002' }));
+});
+
+test('attack: wipe or reset the bank (delete config, reset the counter)', async () => {
+  await assertFails(deleteDoc(doc(as('omar'), 'config/bank')));
+  await assertFails(updateDoc(doc(as('bank'), 'config/bank'), { nextAccount: 1001 }));
+  await assertFails(updateDoc(doc(as('bank'), 'config/bank'), { setupBy: 'omar' }));
+});
+
+test('attack: pay a QR code but send the money to yourself instead', async () => {
+  await assertSucceeds(setDoc(doc(as('canteen'), 'requests/q1'), {
+    merchant: 'AISE-1004', merchantName: 'School Canteen', amount: 300, memo: '', status: 'open', createdAt: serverTimestamp(),
+  }));
+  const db = as('omar');
+  const t = transfer(db, { uid: 'omar', from: 'AISE-1002', to: 'AISE-1003', amount: 300, fromBal: 1000, toBal: 0, requestId: 'q1' });
+  t.batch.update(doc(db, 'requests/q1'), { status: 'paid', paidBy: 'AISE-1002', paidByName: 'Omar Hassan', txId: t.txId });
+  await assertFails(t.commit());
+});

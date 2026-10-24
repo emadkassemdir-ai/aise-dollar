@@ -92,7 +92,7 @@ There's no server. The [security rules](firestore.rules) run inside Google's dat
   Typing the same address into a password account doesn't work.
 - **Forgotten passwords** (username accounts): "New password" switches off the old login completely, and the money stays in the wallet.
 
-These rules are tested by 24 automated attack tests (`tests/rules.test.mjs`): editing your own balance, spending
+These rules are tested by 50 automated attack tests (`tests/rules.test.mjs`): editing your own balance, spending
 someone else's money, sending 1 and crediting 100, replaying an old payment, paying a cancelled or expired QR code,
 promoting yourself to Bank Office, reading other people's balances, and more.
 
