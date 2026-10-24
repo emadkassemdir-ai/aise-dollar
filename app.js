@@ -900,7 +900,36 @@ async function bankAccounts() {
     progress,
     h('button', { type: 'submit' }, 'Create all'));
 
+  // The self-join switch, for the Bank Office's own school email domain.
+  const domain = (state.user.username.split('@')[1] || '').toLowerCase();
+  const openNow = domain ? await B.getOpenDomain() : '';
+  const joinSwitch = domain && h('section.card.span.join-switch',
+    h('label.check-row',
+      h('input', {
+        type: 'checkbox', checked: openNow === domain,
+        onchange: async (e) => {
+          const on = e.target.checked;
+          if (on && !confirm(`Let ANYONE with an @${domain} Google account join by themselves? They start with 0 AISE$.`)) {
+            e.target.checked = false;
+            return;
+          }
+          e.target.disabled = true;
+          try {
+            await B.setOpenDomain(on ? domain : '');
+            notify(on ? `Anyone @${domain} can now join.` : 'Sign-ups closed. Only people you add can join.');
+          } catch (err) {
+            e.target.checked = !on;
+            notify(err.message, 'error');
+          } finally {
+            e.target.disabled = false;
+          }
+        },
+      }),
+      ` Anyone with an @${domain} email can join by themselves`),
+    h('p.muted', 'They get a student wallet with 0 AISE$. Only you can add money. Turn this off any time.'));
+
   return h('div.grid',
+    joinSwitch,
     h('section.card', h('h3', 'Open an account'), createForm),
     h('section.card', h('h3', 'Add a whole class'), importForm),
     output,

@@ -215,12 +215,18 @@ export function signInWithGoogle() {
   });
 }
 
-/** First Google sign-in: link this login to the wallet the Bank Office made for the email. */
+/**
+ * First Google sign-in: link this login to the wallet the Bank Office made for
+ * the email — or, if the Bank Office opened sign-ups for this email's school
+ * domain, create a fresh student wallet.
+ */
 async function claimInvite(user) {
   const email = (user.email || '').toLowerCase();
   const isGoogle = user.providerData.some((p) => p.providerId === 'google.com');
   const invite = isGoogle && email ? await getDoc(ref(`invites/${email}`)).catch(() => null) : null;
   if (!invite?.exists()) {
+    const openDomain = (await getDoc(ref('config/bank'))).data()?.openDomain || '';
+    if (isGoogle && openDomain && email.split('@')[1] === openDomain) return selfJoin(user, email);
     await signOut(auth);
     throw new BankError(`${email || 'This account'} isn't in AISE Dollar yet. Ask the Bank Office to add it.`);
   }
@@ -233,6 +239,26 @@ async function claimInvite(user) {
   } catch (err) {
     await signOut(auth);
     throw err?.code === 'permission-denied' ? new BankError('This account is already linked. Ask the Bank Office for help.') : err;
+  }
+}
+
+/** Join as a student with a new, empty wallet (only while sign-ups are open). */
+async function selfJoin(user, email) {
+  let name = cleanText(user.displayName, 60);
+  if (name.length < 2) name = email.split('@')[0].slice(0, 60);
+  try {
+    await runTransaction(db, async (t) => {
+      const cfg = (await t.get(ref('config/bank'))).data();
+      const acct = `AISE-${cfg.nextAccount}`;
+      t.update(ref('config/bank'), { nextAccount: cfg.nextAccount + 1 });
+      t.set(ref(`users/${user.uid}`), { username: email, accountNo: acct, role: 'student', mustChange: false, disabled: false });
+      t.set(ref(`wallets/${acct}`), { uid: user.uid, name, role: 'student', grade: '', balance: 0, frozen: false, lastTx: '' });
+      t.set(ref(`directory/${acct}`), { name, role: 'student', grade: '', frozen: false });
+    });
+  } catch (err) {
+    await signOut(auth);
+    throw err?.code === 'permission-denied'
+      ? new BankError('Sign-ups were just closed. Ask the Bank Office to add you.') : err;
   }
 }
 
@@ -488,7 +514,10 @@ async function inviteAccount({ name, email, role, grade }) {
   if (!EMAIL_RE.test(email)) throw new BankError(`"${email}" doesn't look like an email address.`);
   if (name.length < 2) throw new BankError('Name must be at least 2 characters.');
   if (!ROLES[role]) throw new BankError(`Unknown type "${role}". Use student, staff, merchant or banker.`);
-  if ((await getDoc(ref(`invites/${email}`))).exists()) throw new BankError(`${email} already has an account.`);
+  if ((await getDoc(ref(`invites/${email}`))).exists() ||
+      !(await getDocs(query(collection(db, 'users'), where('username', '==', email), limit(1)))).empty) {
+    throw new BankError(`${email} already has an account.`);
+  }
   const accountNo = await runTransaction(db, async (t) => {
     const cfg = (await t.get(ref('config/bank'))).data();
     const acct = `AISE-${cfg.nextAccount}`;
@@ -522,6 +551,10 @@ export function resetPassword(account) {
     return { name: account.name, username: oldUser.username, accountNo: account.accountNo, tempPassword };
   });
 }
+
+/** Self-join switch: '' = invite only, or a school domain like 'stu.aisegypt.com'. */
+export const getOpenDomain = () => guard(async () => (await getDoc(ref('config/bank'))).data()?.openDomain || '');
+export const setOpenDomain = (domain) => guard(() => updateDoc(ref('config/bank'), { openDomain: domain }));
 
 export function setFrozen(accountNo, frozen) {
   return guard(async () => {
