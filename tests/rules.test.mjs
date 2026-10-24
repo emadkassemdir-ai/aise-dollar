@@ -290,3 +290,59 @@ test('nobody can download the whole ledger except the Bank Office', async () => 
   await assertFails(getDocs(collection(as('omar'), 'users')));
   await assertSucceeds(getDocs(collection(as('bank'), 'transactions')));
 });
+
+// ---------------------------------------------------------------- self-join (open domain)
+
+async function openDomain(domain) {
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'config/bank'), { openDomain: domain }));
+}
+
+/** What the app writes when a student joins by themselves. config/bank.nextAccount is 1005 in setup. */
+function selfJoin(db, uid, email, { acct = 'AISE-1005', role = 'student', next = 1006, name = 'Sara Adel', balance = 0 } = {}) {
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'config/bank'), { nextAccount: next });
+  batch.set(doc(db, `users/${uid}`), { username: email, accountNo: acct, role, mustChange: false, disabled: false });
+  batch.set(doc(db, `wallets/${acct}`), { uid, name, role, grade: '', balance, frozen: false, lastTx: '' });
+  batch.set(doc(db, `directory/${acct}`), { name, role, grade: '', frozen: false });
+  return batch.commit();
+}
+
+test('self-join: works for the open school domain when switched on', async () => {
+  await openDomain('stu.aisegypt.com');
+  const db = google('s1', 'id11111@stu.aisegypt.com');
+  await assertSucceeds(selfJoin(db, 's1', 'id11111@stu.aisegypt.com'));
+  await assertSucceeds(getDoc(doc(db, 'wallets/AISE-1005')));
+});
+
+test('self-join: refused when switched off, for other domains, or for password accounts', async () => {
+  await assertFails(selfJoin(google('s1', 'id11111@stu.aisegypt.com'), 's1', 'id11111@stu.aisegypt.com'));
+  await openDomain('stu.aisegypt.com');
+  await assertFails(selfJoin(google('h1', 'hacker@gmail.com'), 'h1', 'hacker@gmail.com'));
+  await assertFails(selfJoin(google('h2', 'x@evilstu.aisegypt.com'), 'h2', 'x@evilstu.aisegypt.com'));
+  await assertFails(selfJoin(google('h3', 'id1@stu.aisegypt.com', 'password'), 'h3', 'id1@stu.aisegypt.com'));
+  await assertFails(selfJoin(google('h4', 'id1@stu.aisegypt.com', 'google.com', false), 'h4', 'id1@stu.aisegypt.com'));
+});
+
+test('self-join: cannot become a banker, start with money, skip numbers, or overwrite a wallet', async () => {
+  await openDomain('stu.aisegypt.com');
+  const db = google('s1', 'id11111@stu.aisegypt.com');
+  await assertFails(selfJoin(db, 's1', 'id11111@stu.aisegypt.com', { role: 'banker' }));
+  await assertFails(selfJoin(db, 's1', 'id11111@stu.aisegypt.com', { balance: 100000 }));
+  await assertFails(selfJoin(db, 's1', 'id11111@stu.aisegypt.com', { acct: 'AISE-1099', next: 1100 }));
+  await assertFails(selfJoin(db, 's1', 'id11111@stu.aisegypt.com', { acct: 'AISE-1002', next: 1006 }));
+  await assertFails(selfJoin(db, 's1', 'id11111@stu.aisegypt.com', { next: 1007 }));
+});
+
+test('self-join: only once per person; existing users cannot join again', async () => {
+  await openDomain('stu.aisegypt.com');
+  const db = google('s1', 'id11111@stu.aisegypt.com');
+  await assertSucceeds(selfJoin(db, 's1', 'id11111@stu.aisegypt.com'));
+  await assertFails(selfJoin(db, 's1', 'id11111@stu.aisegypt.com', { acct: 'AISE-1006', next: 1007 }));
+});
+
+test('self-join switch: only the Bank Office can flip it', async () => {
+  await assertFails(updateDoc(doc(as('omar'), 'config/bank'), { openDomain: 'gmail.com' }));
+  await assertSucceeds(updateDoc(doc(as('bank'), 'config/bank'), { openDomain: 'stu.aisegypt.com' }));
+  await assertSucceeds(updateDoc(doc(as('bank'), 'config/bank'), { openDomain: '' }));
+  await assertFails(updateDoc(doc(as('omar'), 'config/bank'), { nextAccount: 1006 }));
+});

@@ -51,6 +51,11 @@ The first person to do this becomes the Bank Office, so do it before you share t
 
 ### 4. Add your class
 
+**Or let them join by themselves:** in **Bank Office → Accounts**, tick
+**"Anyone with an @your-school email can join by themselves"**. Anyone signing in with a
+Google account from your own email's school domain then gets a student wallet with 0 AISE$.
+Untick it any time to go back to invite-only.
+
 - **Bank Office → Accounts → Add a whole class:** paste one student per line with their **school email**, like
   `Omar Hassan, omar.h@school.edu.eg, 5B`. Students just tap **Sign in with Google**, and nothing needs printing.
 - **No email?** For the canteen, write a username instead: `School Canteen, canteen, , merchant`. It gets a printable

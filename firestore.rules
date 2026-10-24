@@ -13,7 +13,9 @@ rules_version = '2';
 //   users/{uid}              role + account link for each login
 //   logins/{username}        username → sign-in email (public lookup by name only)
 //   invites/{email}          school Google email → the wallet it may claim
-//   config/bank              setup marker + account-number counter
+//   config/bank              setup marker, account-number counter, and openDomain
+//                            (e.g. "stu.aisegypt.com": anyone with that Google
+//                            email may join as a student; "" = invite only)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -55,6 +57,24 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/invites/$(googleEmail()));
     }
 
+    // Self-join: the Bank Office switched on "anyone @<openDomain> may join",
+    // this is a real Google sign-in from that domain, and they have no login yet.
+    function cfg() { return get(/databases/$(database)/documents/config/bank).data; }
+    function nextAcct() { return 'AISE-' + string(cfg().nextAccount); }
+    function canSelfJoin() {
+      return signedIn() && googleEmail() != null
+        && !exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && cfg().get('openDomain', '') != ''
+        && googleEmail().split('@')[1] == cfg().get('openDomain', '');
+    }
+    // Everything a self-join batch must contain, checked from any of its documents.
+    function selfJoinBatch(acct) {
+      return canSelfJoin() && acct == nextAcct()
+        && getAfter(/databases/$(database)/documents/config/bank).data.nextAccount == cfg().nextAccount + 1
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountNo == acct
+        && getAfter(/databases/$(database)/documents/wallets/$(acct)).data.uid == request.auth.uid;
+    }
+
     function isCents(v) { return v is int && v > 0 && v <= 100000000; }
     function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
 
@@ -65,9 +85,16 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['setupBy', 'nextAccount'])
         && request.resource.data.setupBy == request.auth.uid
         && request.resource.data.nextAccount == 1002;
-      allow update: if isBanker()
-        && changed().hasOnly(['nextAccount'])
-        && request.resource.data.nextAccount == resource.data.nextAccount + 1;
+      allow update: if
+        (isBanker() && changed().hasOnly(['nextAccount'])
+          && request.resource.data.nextAccount == resource.data.nextAccount + 1) ||
+        // The Bank Office's on/off switch for self-join.
+        (isBanker() && changed().hasOnly(['openDomain'])
+          && request.resource.data.openDomain is string && request.resource.data.openDomain.size() <= 100) ||
+        // A self-joining student takes the next account number.
+        (changed().hasOnly(['nextAccount'])
+          && request.resource.data.nextAccount == resource.data.nextAccount + 1
+          && selfJoinBatch('AISE-' + string(resource.data.nextAccount)));
       allow delete: if false;
     }
 
@@ -89,6 +116,12 @@ service cloud.firestore {
           && request.resource.data.role == invite().role
           && request.resource.data.username == googleEmail()
           && getAfter(/databases/$(database)/documents/wallets/$(invite().accountNo)).data.uid == request.auth.uid
+          && request.resource.data.mustChange == false
+          && request.resource.data.disabled == false) ||
+        // Self-join: always a plain student, on the next account number.
+        (uid == request.auth.uid && selfJoinBatch(request.resource.data.accountNo)
+          && request.resource.data.role == 'student'
+          && request.resource.data.username == googleEmail()
           && request.resource.data.mustChange == false
           && request.resource.data.disabled == false) ||
         (bootstrapping() && uid == request.auth.uid && request.resource.data.role == 'banker'
@@ -133,9 +166,11 @@ service cloud.firestore {
     match /wallets/{acct} {
       // Balances are private: only the owner and the Bank Office can see them.
       allow read: if isBanker() || (isUser() && resource.data.uid == request.auth.uid);
-      allow create: if (isBanker() || bootstrapping())
-        && validWallet(request.resource.data)
-        && request.resource.data.balance == 0 && request.resource.data.frozen == false;
+      allow create: if validWallet(request.resource.data)
+        && request.resource.data.balance == 0 && request.resource.data.frozen == false
+        && (isBanker() || bootstrapping() ||
+            (selfJoinBatch(acct) && request.resource.data.role == 'student'
+              && request.resource.data.uid == request.auth.uid && request.resource.data.lastTx == ''));
       allow update: if validWallet(request.resource.data) && (
         // Admin edits (freeze, rename, relink login) never touch money.
         (isBanker() && changed().hasOnly(['name', 'grade', 'role', 'frozen', 'uid'])) ||
@@ -167,6 +202,12 @@ service cloud.firestore {
       allow create, update: if (isBanker() || bootstrapping())
         && request.resource.data.keys().hasOnly(['name', 'role', 'grade', 'frozen'])
         && request.resource.data.name is string && request.resource.data.frozen is bool;
+      // A self-joining student lists themselves (as a student, not frozen).
+      allow create: if selfJoinBatch(acct)
+        && request.resource.data.keys().hasOnly(['name', 'role', 'grade', 'frozen'])
+        && request.resource.data.name == getAfter(/databases/$(database)/documents/wallets/$(acct)).data.name
+        && request.resource.data.role == 'student' && request.resource.data.frozen == false
+        && request.resource.data.grade is string && request.resource.data.grade.size() <= 20;
       allow delete: if false;
     }
 
