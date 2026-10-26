@@ -183,10 +183,10 @@ function renderChrome() {
   const signedIn = u && !u.mustChange;
   const hash = (location.hash || '#/').split('?')[0];
   const tabs = [
-    signedIn && ['#/', 'Wallet', ['#/', '#/send', '#/receive', '#/scan']],
-    signedIn && ['#/till', u.role === 'merchant' ? 'Till' : 'Request'],
-    ['#/convert', 'Converter'],
-    signedIn && u.role === 'banker' && ['#/bank', 'Bank Office'],
+    signedIn && ['#/', '💰 My money', ['#/', '#/send', '#/receive', '#/scan']],
+    signedIn && ['#/till', u.role === 'merchant' ? '🛒 Till' : '🧾 Request'],
+    ['#/convert', '🔁 Converter'],
+    signedIn && u.role === 'banker' && ['#/bank', '🏦 Bank Office'],
   ].filter(Boolean);
   document.getElementById('nav').replaceChildren(...tabs.map(([href, label, also]) => {
     const active = hash === href || (also || []).includes(hash) || (href === '#/bank' && hash.startsWith('#/bank')) ||
@@ -209,7 +209,7 @@ async function logout() {
 
 function viewNotConfigured() {
   return h('section.card.narrow',
-    h('h2', 'Almost there!'),
+    h('h2', 'Almost there! 🛠️'),
     h('p', 'AISE Dollar needs its Firebase database connected before anyone can sign in.'),
     h('p.muted', 'Follow “Connect Firebase” in the README, then paste the config into firebase-config.js.'));
 }
@@ -246,7 +246,7 @@ async function afterSignIn() {
     state.user = null;
     await refreshMe();
     if (state.user?.needsSetup) return go('#/setup');
-    notify(`Welcome, ${firstName(state.user.name)}!`);
+    notify(`Hey ${firstName(state.user.name)}! 👋`);
     go(sessionTake('returnTo') || '#/');
   } catch (err) {
     state.user = null;
@@ -262,23 +262,23 @@ async function viewSetup() {
   if (!state.user?.needsSetup) {
     return h('section.card.narrow.login',
       h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
-      h('h2', 'Set up AISE Dollar'),
-      h('p.muted', 'Sign in with your school Google account. You’ll become the Bank Office and add your class from there.'),
+      h('h2', 'Let’s open your bank! 🏦'),
+      h('p.muted', 'Sign in with your school Google account. You’ll be the Bank Office — the one who adds friends and hands out money.'),
       googleButton('Sign in with Google to start'));
   }
   return h('section.card.narrow',
-    h('h2', 'Set up AISE Dollar'),
+    h('h2', 'Almost done! ✨'),
     h('p.muted', `Signed in as ${state.user.email}. This account becomes the Bank Office.`),
     h('form.stack', {
       onsubmit: onSubmit(async (fd) => {
         await B.setup({ name: fd.get('name') });
         state.user = null;
         await refreshMe();
-        notify('Bank Office ready! Now add your class.');
+        notify('Your bank is open! 🎉 Now add your friends.');
         go('#/bank/accounts');
       }),
     },
-      field('Your name (as students will see it)', h('input', { name: 'name', required: true, autocomplete: 'name', placeholder: 'e.g. Ms. Nadia' })),
+      field('What should everyone call you?', h('input', { name: 'name', required: true, autocomplete: 'name', placeholder: 'e.g. Ms. Nadia' })),
       h('button.primary', { type: 'submit' }, 'Create Bank Office')));
 }
 
@@ -286,8 +286,8 @@ function viewLogin() {
   if (state.user) { go(sessionTake('returnTo') || '#/'); return h('div'); }
   return h('section.card.narrow.login',
     h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
-    h('h2', 'Sign in'),
-    h('p.muted', 'Use your school email.'),
+    h('h2', 'Hey there! 👋'),
+    h('p.muted', 'Sign in with your school Google account to see your money.'),
     googleButton(),
     h('details.username-login',
       h('summary', 'No school email? Use a username'),
@@ -295,14 +295,14 @@ function viewLogin() {
       onsubmit: onSubmit(async (fd) => {
         state.user = await B.login(fd.get('username'), fd.get('password'));
         if (state.user.mustChange) return go('#/password');
-        notify(`Welcome, ${firstName(state.user.name)}!`);
+        notify(`Hey ${firstName(state.user.name)}! 👋`);
         go(sessionTake('returnTo') || '#/');
       }),
     },
       field('Username', h('input', { name: 'username', required: true, autocomplete: 'username', autocapitalize: 'none', spellcheck: false })),
       field('Password', passwordInput('password', 'current-password')),
       h('button.primary', { type: 'submit' }, 'Sign in')),
-      h('p.muted.small-print', 'Forgot your password? Ask the Bank Office for a new slip.')));
+      h('p.muted.small-print', 'Forgot your password? No worries — ask the Bank Office for a new slip.')));
 }
 
 function viewPassword() {
@@ -310,13 +310,13 @@ function viewPassword() {
   const forced = state.user?.mustChange;
   return h('section.card.narrow',
     h('h2', forced ? 'Make your own password' : 'Change password'),
-    forced && h('p.muted', 'You signed in with the password on your slip. Now pick a new one that only you know.'),
+    forced && h('p.muted', 'That password on your slip was just for today. Pick a new one that only you know 🤫'),
     h('form.stack', {
       onsubmit: onSubmit(async (fd) => {
         if (fd.get('next') !== fd.get('next2')) throw new B.BankError('New passwords do not match.');
         await B.changePassword(fd.get('current'), fd.get('next'));
         await refreshMe();
-        notify('Password saved!');
+        notify('Password saved! 🔒');
         go(sessionTake('returnTo') || '#/');
       }),
     },
@@ -347,7 +347,7 @@ function txItem(tx, name) {
 }
 
 /** A transaction list with "Load more" paging. */
-function txFeed(loadPage, { pageSize = 25, empty = 'No transactions yet.' } = {}) {
+function txFeed(loadPage, { pageSize = 25, empty = 'Nothing here yet — your money story starts soon ✨' } = {}) {
   const list = h('ul.txs');
   const more = h('button.ghost.more', { hidden: true, onclick: load }, 'Load more');
   let last = null;
@@ -372,23 +372,23 @@ function txFeed(loadPage, { pageSize = 25, empty = 'No transactions yet.' } = {}
 async function viewWallet() {
   const u = await refreshMe();
   const actions = [
-    ['#/send', 'Send', '↗'],
-    ['#/receive', 'Receive', '↙'],
-    ['#/scan', 'Scan to pay', '⌗'],
-    ['#/till', u.role === 'merchant' ? 'Open till' : 'Request', '▦'],
+    ['#/send', 'Send', '💸'],
+    ['#/receive', 'Get paid', '🤲'],
+    ['#/scan', 'Scan to pay', '📷'],
+    ['#/till', u.role === 'merchant' ? 'Open till' : 'Request', '🧾'],
   ];
   return h('div.grid',
     h('section.card.balance-card',
       h('div.row',
         h('div', h('p.muted', `${B.ROLES[u.role]} · ${u.accountNo}${u.grade ? ` · ${u.grade}` : ''}`), h('h2', u.name)),
         !u.google && h('a.ghost-link', { href: '#/password' }, 'Password')),
-      h('p.muted', 'My balance'),
+      h('p.muted', 'You’ve got'),
       money(u.balance, '.big'),
-      u.frozen && h('p.warn', 'This account is frozen. Visit the Bank Office.'),
+      u.frozen && h('p.warn', '🧊 Your account is frozen for now. Talk to the Bank Office.'),
       h('div.actions-row', actions.map(([href, label, icon]) =>
         h('a.action', { href }, h('span.action-icon', { 'aria-hidden': 'true' }, icon), label)))),
     h('section.card.span',
-      h('h3', 'History'),
+      h('h3', 'What’s been happening'),
       txFeed((opts) => B.history(u.accountNo, opts))));
 }
 
@@ -427,8 +427,8 @@ async function viewSend({ params }) {
   let txId = B.newTxId(); // one id per send: a retry can never pay twice
 
   const formCard = h('section.card.narrow',
-    h('h2', 'Send AISE$'),
-    h('p.muted', `You have ${M.formatAise(state.user.balance)}`),
+    h('h2', 'Send money 💸'),
+    h('p.muted', `You’ve got ${M.formatAise(state.user.balance)}`),
     h('form.stack', {
       onsubmit: onSubmit(async (fd) => {
         const to = picker.find();
@@ -440,12 +440,12 @@ async function viewSend({ params }) {
     },
       picker.el,
       amountInput({ value: params.get('amount') || '', autofocus: Boolean(preset) }),
-      field('Note (optional)', h('input', { name: 'memo', maxLength: 140, value: params.get('memo') || '', placeholder: 'e.g. Snack, book, club' })),
+      field('Note (optional)', h('input', { name: 'memo', maxLength: 140, value: params.get('memo') || '', placeholder: 'e.g. thanks for the snack 🍪' })),
       h('button.primary', { type: 'submit' }, 'Review')));
 
   function confirmCard(to, amount, memo) {
     const card = h('section.card.narrow.confirm',
-      h('p.muted', 'You are sending'),
+      h('p.muted', 'You’re sending'),
       money(amount, '.big'),
       h('p', 'to ', h('strong', to.name), ` (${to.accountNo})`),
       memo && h('p.memo-line', `“${memo}”`),
@@ -469,7 +469,7 @@ function successCard(title, balance, { sendAgain = true } = {}) {
   return h('section.card.narrow.success',
     h('div.check', { 'aria-hidden': 'true' }, '✓'),
     h('h2', title),
-    balance !== undefined && h('p.muted', `You now have ${M.formatAise(balance)} (${M.formatEgp(balance)})`),
+    balance !== undefined && h('p.muted', `You’ve now got ${M.formatAise(balance)} (${M.formatEgp(balance)})`),
     h('div.row.center-row',
       h(sendAgain ? 'a.button' : 'a.button.primary', { href: '#/' }, 'Back to wallet'),
       // go() re-renders even when we're already on #/send (a plain link would do nothing).
@@ -515,15 +515,15 @@ function viewReceive() {
   const link = appUrl(`#/send?to=${encodeURIComponent(u.accountNo)}`);
   return h('div.grid',
     h('section.card.center',
-      h('h2', 'Get paid'),
-      h('p.muted', 'Let your friend scan this with their iPad camera, or tell them your account number.'),
+      h('h2', 'Get paid 🤲'),
+      h('p.muted', 'Let your friend scan this with their iPad camera — or just tell them your account number.'),
       h('div.qr-wrap', qrCanvas(link)),
       h('p.account-big', u.accountNo),
       h('p', u.name),
       h('button', { onclick: () => copy(link) }, 'Copy my payment link')),
     h('section.card.center',
       h('h3', 'Need an exact amount?'),
-      h('p.muted', 'Make a one-time code. It closes by itself once paid.'),
+      h('p.muted', 'Make a one-time code. It disappears by itself once they pay.'),
       h('a.button.primary', { href: '#/till' }, 'Request a payment')));
 }
 
@@ -545,7 +545,7 @@ function viewTill() {
     const input = amount.querySelector('input');
     container.replaceChildren(h('section.card.narrow',
       h('h2', u.role === 'merchant' ? `${u.name} till` : 'Request a payment'),
-      h('p.muted', 'Type the price, then show the QR code to the customer.'),
+      h('p.muted', 'Type the price, then show your friend the QR code.'),
       h('form.stack', {
         onsubmit: onSubmit(async (fd) => {
           const cents = M.parseAmount(fd.get('amount'));
@@ -607,7 +607,7 @@ function viewTill() {
     chime();
     container.replaceChildren(h('section.card.center.success.till-paid',
       h('div.check', { 'aria-hidden': 'true' }, '✓'),
-      h('h2', 'Paid!'),
+      h('h2', 'Paid! 🎉'),
       money(r.amount, '.big'),
       h('p', 'by ', h('strong', r.paidByName)),
       r.memo && h('p.memo-line', r.memo),
@@ -675,7 +675,7 @@ async function viewPay({ match }) {
     money(request.amount, '.big'),
     request.memo && h('p.memo-line', request.memo),
     h('p.muted', `You have ${M.formatAise(state.user.balance)}`),
-    short && h('p.warn', 'Not enough AISE$. Top up at the Bank Office.'),
+    short && h('p.warn', 'Not enough AISE$ yet — visit the Bank Office to top up.'),
     h('form.row', {
       onsubmit: onSubmit(async () => {
         const res = await B.payRequest({ id, payer: state.user, txId });
@@ -752,8 +752,8 @@ function viewConvert() {
     try { aise.value = egp.value ? M.plainCents(M.egpToAise(M.parseAmount(egp.value)).aiseCents) : ''; } catch { aise.value = ''; }
   });
   return h('section.card.narrow',
-    h('h2', 'Money converter'),
-    h('p.muted', `1 AISE$ is always worth ${M.EGP_PER_AISE} EGP.`),
+    h('h2', 'How much is that? 🤔'),
+    h('p.muted', `1 AISE$ is always worth ${M.EGP_PER_AISE} Egyptian pounds. Type in either box.`),
     h('div.converter', field('AISE$', aise), h('span.swap', { 'aria-hidden': 'true' }, '⇄'), field('EGP', egp)),
     h('table.ref',
       h('caption', 'Quick reference'),
