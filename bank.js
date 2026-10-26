@@ -552,6 +552,39 @@ export function resetPassword(account) {
   });
 }
 
+// ============================================================== brand ===
+
+/** Text limits — keep in sync with validBrand() in firestore.rules. */
+export const BRAND_LIMITS = { name: 40, tagline: 80, coinText: 4, loginTitle: 60, loginText: 160, footer: 120 };
+const BRAND_KEYS = [...Object.keys(BRAND_LIMITS), 'logo'];
+
+/** Live site look (name, tagline, logo…). Calls `fn(null)` when nothing is saved yet. */
+export function watchBrand(fn) {
+  if (!configured) { fn(null); return () => {}; }
+  return onSnapshot(ref('config/brand'), (snap) => fn(snap.exists() ? snap.data() : null), () => fn(null));
+}
+
+export function saveBrand(brand) {
+  return guard(async () => {
+    const clean = {};
+    for (const [key, max] of Object.entries(BRAND_LIMITS)) clean[key] = cleanText(brand[key], max);
+    if (!clean.name) throw new BankError('The site needs a name.');
+    clean.logo = String(brand.logo || '');
+    if (clean.logo && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(clean.logo)) {
+      throw new BankError('That logo picture didn’t work. Try a different photo.');
+    }
+    if (clean.logo.length > 250000) throw new BankError('That logo is too big. Try a smaller picture.');
+    try {
+      await setDoc(ref('config/brand'), Object.fromEntries(BRAND_KEYS.map((k) => [k, clean[k]])));
+    } catch (err) {
+      if (err?.code === 'permission-denied') {
+        throw new BankError('Firebase is still using the old security rules. Paste the latest firestore.rules into Firestore → Rules → Publish, then try again.');
+      }
+      throw err;
+    }
+  });
+}
+
 /** Self-join switch: '' = invite only, or a school domain like 'stu.aisegypt.com'. */
 export const getOpenDomain = () => guard(async () => (await getDoc(ref('config/bank'))).data()?.openDomain || '');
 export const setOpenDomain = (domain) => guard(async () => {

@@ -466,3 +466,33 @@ test('attack: pay a QR code but send the money to yourself instead', async () =>
   t.batch.update(doc(db, 'requests/q1'), { status: 'paid', paidBy: 'AISE-1002', paidByName: 'Omar Hassan', txId: t.txId });
   await assertFails(t.commit());
 });
+
+// ---------------------------------------------------------------- brand (site look)
+
+const BRAND = { name: 'Adam Bucks', tagline: 'our money', coinText: 'AB', logo: '', loginTitle: 'Yo!', loginText: 'Sign in', footer: 'made by Adam' };
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+test('brand: everyone can read it; only the Bank Office can change it', async () => {
+  await assertSucceeds(setDoc(doc(as('bank'), 'config/brand'), BRAND));
+  await assertSucceeds(getDoc(doc(env.unauthenticatedContext().firestore(), 'config/brand')));
+  await assertFails(setDoc(doc(as('omar'), 'config/brand'), { ...BRAND, name: 'Omar Owns This' }));
+  await assertFails(setDoc(doc(env.unauthenticatedContext().firestore(), 'config/brand'), BRAND));
+  await assertFails(deleteDoc(doc(as('bank'), 'config/brand')));
+});
+
+test('brand: logo must be a small PNG/JPEG/WebP picture, never SVG or a link', async () => {
+  const bank = as('bank');
+  await assertSucceeds(setDoc(doc(bank, 'config/brand'), { ...BRAND, logo: PNG }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, logo: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, logo: 'https://evil.example/x.png' }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, logo: 'data:image/png;base64,abc"><script>' }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, logo: `data:image/png;base64,${'A'.repeat(260000)}` }));
+});
+
+test('brand: text length limits and no extra fields', async () => {
+  const bank = as('bank');
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, name: '' }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, name: 'x'.repeat(41) }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, coinText: 'TOOLONG' }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, sneaky: 'field' }));
+});
