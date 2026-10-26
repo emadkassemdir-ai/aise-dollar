@@ -359,3 +359,11 @@ tr.frozen td { opacity: 0.5; }
 .join-switch { background: var(--sky); }
 .join-switch .check-row { font-size: 1.05rem; }
 .join-switch p { margin-top: 6px; }
+
+/* ---------- custom logo + Look editor ---------- */
+.coin img, .login-coin img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+.coin.has-logo, .login-coin.has-logo { background: #fff; padding: 0; overflow: hidden; }
+.logo-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.logo-row .login-coin { margin: 0; animation: none; }
+.look-preview { background: var(--paper); border: 2px dashed var(--line); border-radius: 18px; padding: 16px; }
+.look-preview .brand { pointer-events: none; }

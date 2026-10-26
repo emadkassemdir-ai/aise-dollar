@@ -97,7 +97,40 @@ function sessionTake(key) {
 
 // ================================================================ state ===
 
-const state = { user: null, directory: null, refreshBankStats: null };
+const state = { user: null, directory: null, refreshBankStats: null, brand: null };
+
+// ================================================================ brand ===
+
+/** The site's look before the Bank Office customises it. */
+const DEFAULT_BRAND = {
+  name: 'AISE Dollar',
+  tagline: 'the class money of AIS Egypt 🪙',
+  coinText: 'A$',
+  logo: '',
+  loginTitle: 'Hey there! 👋',
+  loginText: 'Sign in with your school Google account to see your money.',
+  footer: 'Made by students, for students 💛',
+};
+state.brand = { ...DEFAULT_BRAND };
+
+/** A round coin showing the uploaded logo, or the coin letters. */
+function coinEl(tag, brand = state.brand) {
+  return brand.logo
+    ? h(`${tag}.has-logo`, { 'aria-hidden': 'true' }, h('img', { src: brand.logo, alt: '' }))
+    : h(tag, { 'aria-hidden': 'true' }, brand.coinText || DEFAULT_BRAND.coinText);
+}
+
+/** Put the brand into the header, footer, tab title and favicon. */
+function applyBrand(brand = state.brand) {
+  document.getElementById('brand-name').textContent = brand.name;
+  document.getElementById('brand-sub').textContent = brand.tagline;
+  document.getElementById('brand-foot').textContent = brand.footer;
+  document.getElementById('brand-coin').replaceWith(Object.assign(coinEl('span.coin', brand), { id: 'brand-coin' }));
+  document.title = brand.name;
+  const icon = document.getElementById('favicon');
+  icon.href = brand.logo || 'icon.svg';
+  icon.type = brand.logo ? brand.logo.slice(5, brand.logo.indexOf(';')) : 'image/svg+xml';
+}
 
 async function refreshMe() {
   state.user = await B.me();
@@ -261,7 +294,7 @@ async function viewSetup() {
   if (!(await B.needsSetup())) { go('#/login'); return h('div'); }
   if (!state.user?.needsSetup) {
     return h('section.card.narrow.login',
-      h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
+      coinEl('div.login-coin'),
       h('h2', 'Let’s open your bank! 🏦'),
       h('p.muted', 'Sign in with your school Google account. You’ll be the Bank Office — the one who adds friends and hands out money.'),
       googleButton('Sign in with Google to start'));
@@ -285,9 +318,9 @@ async function viewSetup() {
 function viewLogin() {
   if (state.user) { go(sessionTake('returnTo') || '#/'); return h('div'); }
   return h('section.card.narrow.login',
-    h('div.login-coin', { 'aria-hidden': 'true' }, 'A$'),
-    h('h2', 'Hey there! 👋'),
-    h('p.muted', 'Sign in with your school Google account to see your money.'),
+    coinEl('div.login-coin'),
+    h('h2', state.brand.loginTitle),
+    state.brand.loginText && h('p.muted', state.brand.loginText),
     googleButton(),
     h('details.username-login',
       h('summary', 'No school email? Use a username'),
@@ -764,8 +797,8 @@ function viewConvert() {
 
 async function viewBank({ match }) {
   const tab = match[1] || 'accounts';
-  const tabs = [['accounts', 'Accounts'], ['deposit', 'Deposit'], ['cashout', 'Cash out'], ['ledger', 'Ledger']];
-  const panels = { accounts: bankAccounts, deposit: bankDeposit, cashout: bankCashout, ledger: bankLedger };
+  const tabs = [['accounts', 'Accounts'], ['deposit', 'Deposit'], ['cashout', 'Cash out'], ['ledger', 'Ledger'], ['look', '🎨 Look']];
+  const panels = { accounts: bankAccounts, deposit: bankDeposit, cashout: bankCashout, ledger: bankLedger, look: bankLook };
   const tiles = h('section.tiles');
   const tile = (label, value, sub) => h('div.tile', h('span.muted', label), h('strong', value), sub && h('span.muted', sub));
   async function refreshStats() {
@@ -1034,6 +1067,91 @@ async function bankCashout() {
       h('button.primary', { type: 'submit' }, 'Cash out')));
 }
 
+/**
+ * Edit the site's look. Changes preview live in the real header as you type;
+ * leaving without saving puts the saved look back.
+ */
+function bankLook() {
+  const draft = { ...state.brand };
+  const L = B.BRAND_LIMITS;
+  onLeave(() => applyBrand());
+
+  const previewCoin = h('div.logo-row');
+  function refresh() {
+    applyBrand(draft);
+    previewCoin.replaceChildren(coinEl('div.login-coin', draft),
+      h('div.stack',
+        h('label.button', { tabIndex: 0 }, '📷 Choose a logo picture', fileInput),
+        draft.logo && h('button', { type: 'button', onclick: () => { draft.logo = ''; refresh(); } }, 'Remove picture')));
+  }
+
+  const fileInput = h('input', {
+    type: 'file', accept: 'image/*', hidden: true,
+    onchange: async () => {
+      const file = fileInput.files[0];
+      fileInput.value = '';
+      if (!file) return;
+      try {
+        draft.logo = await squareLogo(file);
+        refresh();
+      } catch {
+        notify('That picture didn’t work. Try a different one.', 'error');
+      }
+    },
+  });
+
+  const text = (key, label, hint) => field(label, h('input', {
+    name: key, value: draft[key], maxLength: L[key],
+    oninput: (e) => { draft[key] = e.target.value; refresh(); },
+  }), hint);
+
+  refresh();
+  return h('section.card.narrow',
+    h('h3', 'Make it yours 🎨'),
+    h('p.muted', 'Change the name, logo and words everyone sees. You’ll see it change at the top as you type.'),
+    h('form.stack', {
+      onsubmit: onSubmit(async () => {
+        await B.saveBrand(draft);
+        notify('Saved! Everyone sees the new look now 🎉');
+      }),
+    },
+      h('div.field', h('span.label', 'Logo'), previewCoin),
+      text('coinText', 'Coin letters (if no picture)', 'Up to 4 letters, like A$ or 🪙'),
+      text('name', 'Site name'),
+      text('tagline', 'Tagline (under the name)'),
+      text('loginTitle', 'Sign-in greeting'),
+      text('loginText', 'Sign-in message'),
+      text('footer', 'Footer (bottom of every page)'),
+      h('div.row',
+        h('button', {
+          type: 'button',
+          onclick: () => {
+            if (!confirm('Go back to the original AISE Dollar look? (Press Save after.)')) return;
+            Object.assign(draft, DEFAULT_BRAND);
+            for (const input of document.querySelectorAll('.card form input[name]')) input.value = draft[input.name] ?? '';
+            refresh();
+          },
+        }, '↩️ Original look'),
+        h('button.primary', { type: 'submit' }, 'Save'))));
+}
+
+/** Turn any photo into a small square PNG (crop to the middle), so it's quick to load. */
+function squareLogo(file, size = 160) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const canvas = h('canvas', { width: size, height: size });
+      canvas.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+    img.src = url;
+  });
+}
+
 function bankLedger() {
   return h('section.card',
     h('div.row', h('h3', 'Full ledger'), h('button.small', { onclick: exportCsv }, 'Download CSV')),
@@ -1065,6 +1183,16 @@ async function exportCsv() {
 // ================================================================= boot ===
 
 window.addEventListener('hashchange', route);
+
+// The site's look, live: when the Bank Office saves a new name or logo,
+// every open page updates. The sign-in screen re-draws to show it.
+B.watchBrand((saved) => {
+  state.brand = { ...DEFAULT_BRAND, ...(saved || {}) };
+  const path = (location.hash || '#/').split('?')[0];
+  if (path === '#/bank/look') return; // don't overwrite the editor's live preview
+  applyBrand();
+  if (path === '#/login' && !state.user) route();
+});
 
 // Follow Google's sign-in state directly: if someone becomes signed in while
 // the sign-in screen is showing, continue — even if the popup itself reported

@@ -98,6 +98,26 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // -------------------------------------------------------------- brand --
+    // The site's name, tagline, coin letters, logo and greeting. Everyone can
+    // read it (it's shown before sign-in); only the Bank Office can change it.
+    function shortText(d, key, max) { return d[key] is string && d[key].size() <= max; }
+    function validBrand(d) {
+      return d.keys().hasOnly(['name', 'tagline', 'coinText', 'logo', 'loginTitle', 'loginText', 'footer'])
+        && shortText(d, 'name', 40) && d.name.size() >= 1
+        && shortText(d, 'tagline', 80) && shortText(d, 'coinText', 4)
+        && shortText(d, 'loginTitle', 60) && shortText(d, 'loginText', 160) && shortText(d, 'footer', 120)
+        // Logo: empty, or a small PNG/JPEG/WebP picture stored inline (no SVG, no links).
+        && d.logo is string && (d.logo == '' || (d.logo.size() <= 250000
+          && d.logo.matches('^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$')));
+    }
+
+    match /config/brand {
+      allow read: if true;
+      allow create, update: if isBanker() && validBrand(request.resource.data);
+      allow delete: if false;
+    }
+
     // -------------------------------------------------------------- users --
     function validUser(d) {
       return d.keys().hasOnly(['username', 'accountNo', 'role', 'mustChange', 'disabled'])
