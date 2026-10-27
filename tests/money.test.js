@@ -29,3 +29,11 @@ test('egpToAise rounds down and reports exact change', () => {
   assert.deepEqual(M.egpToAise(9), { aiseCents: 0, changeEgpCents: 9 });
   assert.throws(() => M.egpToAise(-1), M.MoneyError);
 });
+
+test('the currency can be renamed without changing amounts', () => {
+  M.setCurrency('Adam Coins');
+  assert.equal(M.formatAise(1250), 'Adam Coins 12.50');
+  assert.equal(M.formatEgp(1250), 'EGP 125.00');
+  M.setCurrency('   ');
+  assert.equal(M.formatAise(1250), 'AISE$ 12.50', 'blank goes back to the default');
+});

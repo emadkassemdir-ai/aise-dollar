@@ -556,7 +556,9 @@ export function resetPassword(account) {
 
 /** Text limits — keep in sync with validBrand() in firestore.rules. */
 export const BRAND_LIMITS = { name: 40, tagline: 80, coinText: 4, loginTitle: 60, loginText: 160, footer: 120 };
-const BRAND_KEYS = [...Object.keys(BRAND_LIMITS), 'logo'];
+export const THEME_FONTS = ['rounded', 'classic', 'serif', 'handwritten', 'typewriter'];
+export const THEME_PATTERNS = ['dots', 'grid', 'lines', 'plain'];
+const HEX = /^#[0-9a-fA-F]{6}$/;
 
 /** Live site look (name, tagline, logo…). Calls `fn(null)` when nothing is saved yet. */
 export function watchBrand(fn) {
@@ -574,8 +576,28 @@ export function saveBrand(brand) {
       throw new BankError('That logo picture didn’t work. Try a different photo.');
     }
     if (clean.logo.length > 250000) throw new BankError('That logo is too big. Try a smaller picture.');
+
+    // Currency name: just a label, the 1 : 10 EGP rate never changes.
+    clean.currency = cleanText(brand.currency, 12);
+
+    // Words: only the ones changed from the default are stored.
+    clean.words = {};
+    for (const [key, value] of Object.entries(brand.words || {})) {
+      const text = String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (text && /^[a-z]+\.[A-Za-z]+$/.test(key)) clean.words[key] = text;
+    }
+    if (Object.keys(clean.words).length > 400) throw new BankError('Too many changed words.');
+
+    // Theme: colours as #rrggbb, plus a font and background pattern from the lists.
+    clean.theme = {};
+    for (const key of ['primary', 'coin', 'paper', 'ink']) {
+      if (HEX.test(brand.theme?.[key] || '')) clean.theme[key] = brand.theme[key].toLowerCase();
+    }
+    if (THEME_FONTS.includes(brand.theme?.font)) clean.theme.font = brand.theme.font;
+    if (THEME_PATTERNS.includes(brand.theme?.pattern)) clean.theme.pattern = brand.theme.pattern;
+
     try {
-      await setDoc(ref('config/brand'), Object.fromEntries(BRAND_KEYS.map((k) => [k, clean[k]])));
+      await setDoc(ref('config/brand'), clean);
     } catch (err) {
       if (err?.code === 'permission-denied') {
         throw new BankError('Firebase is still using the old security rules. Paste the latest firestore.rules into Firestore → Rules → Publish, then try again.');

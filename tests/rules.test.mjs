@@ -496,3 +496,22 @@ test('brand: text length limits and no extra fields', async () => {
   await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, coinText: 'TOOLONG' }));
   await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, sneaky: 'field' }));
 });
+
+test('brand: words, currency and theme can be customised by the Bank Office', async () => {
+  const bank = as('bank');
+  await assertSucceeds(setDoc(doc(bank, 'config/brand'), {
+    ...BRAND, currency: 'Adam Coins', words: { 'wallet.send': 'Zap it ⚡', 'nav.bank': '🏦 HQ' },
+    theme: { primary: '#ff0066', coin: '#22cc88', paper: '#101820', ink: '#f0f0f0', font: 'handwritten', pattern: 'grid' },
+  }));
+  await assertFails(setDoc(doc(as('omar'), 'config/brand'), { ...BRAND, words: { 'wallet.send': 'hacked' } }));
+});
+
+test('brand: bad theme values are refused', async () => {
+  const bank = as('bank');
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, theme: { primary: 'red; background:url(x)' } }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, theme: { font: 'Comic Sans; } body { display:none' } }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, theme: { pattern: 'zebra' } }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, theme: { sneaky: '#000000' } }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, currency: 'x'.repeat(13) }));
+  await assertFails(setDoc(doc(bank, 'config/brand'), { ...BRAND, words: 'not a map' }));
+});
