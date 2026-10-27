@@ -10,9 +10,11 @@
   --muted: #6c6a7d;
   --line: #ecdfc6;          /* card borders + sticker shadows */
   --blue: #3355c4;          /* main button colour */
-  --blue-deep: #22398c;
   --sun: #ffc93c;           /* coin + highlights */
-  --sun-deep: #e0a400;
+  --on-blue: #ffffff;       /* text on buttons (flips to dark for light colours) */
+  --on-sun: #3d2a00;        /* text on the coin / wallet card */
+  --blue-deep: color-mix(in srgb, var(--blue) 72%, #000);
+  --sun-deep: color-mix(in srgb, var(--sun) 80%, #6b4200);
   --mint: #1f9d63;          /* money in */
   --coral: #e5484d;         /* money out / errors */
   --sky: #e8efff;
@@ -32,7 +34,6 @@
     --muted: #b3ab9b;
     --line: #3a352c;
     --blue: #6f8cff;
-    --blue-deep: #4f6be0;
     --sky: #262d45;
     --mint: #4fd18e;
     --coral: #ff7a7e;
@@ -55,6 +56,14 @@ body {
   background-image: radial-gradient(var(--paper-dot) 1.2px, transparent 1.3px);
   background-size: 22px 22px;
 }
+body[data-pattern="plain"] { background-image: none; }
+body[data-pattern="grid"] {
+  background-image: linear-gradient(var(--paper-dot) 1px, transparent 1px), linear-gradient(90deg, var(--paper-dot) 1px, transparent 1px);
+}
+body[data-pattern="lines"] {
+  background-image: linear-gradient(transparent 27px, var(--paper-dot) 28px);
+  background-size: 100% 28px;
+}
 
 h1, h2, h3 { margin: 0; line-height: 1.2; font-weight: 800; letter-spacing: -0.01em; }
 h2 { font-size: 1.5rem; }
@@ -74,9 +83,9 @@ a { color: var(--blue); }
 .coin {
   width: 50px; height: 50px; border-radius: 50%; flex: none;
   display: grid; place-items: center;
-  background: radial-gradient(circle at 32% 30%, #fff1b8, var(--sun) 55%, var(--sun-deep));
-  color: #5b3d00; font: 900 1.05rem var(--font);
-  border: 3px solid #fff; box-shadow: 0 3px 0 var(--sun-deep), 0 6px 14px rgb(224 164 0 / 35%);
+  background: radial-gradient(circle at 32% 30%, color-mix(in srgb, var(--sun) 40%, #fff), var(--sun) 55%, var(--sun-deep));
+  color: var(--on-sun); font: 900 1.05rem var(--font);
+  border: 3px solid #fff; box-shadow: 0 3px 0 var(--sun-deep), 0 6px 14px color-mix(in srgb, var(--sun-deep) 35%, transparent);
   transform: rotate(-8deg);
   transition: transform 0.3s cubic-bezier(.3, 1.6, .5, 1);
 }
@@ -167,7 +176,7 @@ button, .button {
 button:active:not(:disabled), .button:active { transform: translateY(3px); box-shadow: 0 0 0 var(--line); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .primary {
-  background: var(--blue) !important; border-color: var(--blue-deep) !important; color: #fff !important;
+  background: var(--blue) !important; border-color: var(--blue-deep) !important; color: var(--on-blue) !important;
   box-shadow: 0 4px 0 var(--blue-deep) !important;
 }
 .primary:active:not(:disabled) { box-shadow: 0 0 0 var(--blue-deep) !important; transform: translateY(4px); }
@@ -175,20 +184,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .small { padding: 4px 14px; min-height: 36px; font-size: 0.85rem; }
 .big-btn { min-height: 60px; font-size: 1.15rem; }
 .more { width: 100%; margin-top: 10px; }
-.ghost-link { color: #5b3d00; font-size: 0.9rem; font-weight: 700; }
+.ghost-link { color: var(--on-sun); font-size: 0.9rem; font-weight: 700; }
 
 /* ---------- wallet ---------- */
 .balance-card {
   grid-column: 1 / -1; position: relative; overflow: hidden;
-  background: linear-gradient(150deg, #ffe08a, var(--sun));
-  border-color: var(--sun-deep); box-shadow: 0 5px 0 var(--sun-deep); color: #3d2a00;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--sun) 55%, #fff), var(--sun));
+  border-color: var(--sun-deep); box-shadow: 0 5px 0 var(--sun-deep); color: var(--on-sun);
 }
 .balance-card::after {   /* big decorative coin peeking in */
   content: "A$"; position: absolute; right: -28px; top: -28px; width: 150px; height: 150px; border-radius: 50%;
   display: grid; place-items: center; font: 900 2.6rem var(--font); color: rgb(255 255 255 / 55%);
   border: 10px solid rgb(255 255 255 / 35%); transform: rotate(14deg); pointer-events: none;
 }
-.balance-card .muted { color: #6b5520; }
+.balance-card .muted { color: var(--on-sun); opacity: 0.75; }
 .balance-card .row { margin-bottom: 12px; align-items: flex-start; position: relative; z-index: 1; }
 .money { display: flex; flex-direction: column; }
 .money .aise { font-weight: 900; font-variant-numeric: tabular-nums; }
@@ -201,7 +210,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 12px 4px; border-radius: 18px; background: rgb(255 255 255 / 70%);
   border: 2px solid rgb(255 255 255 / 90%); box-shadow: 0 3px 0 var(--sun-deep);
-  color: #3d2a00; text-decoration: none; font-size: 0.88rem; font-weight: 800; text-align: center;
+  color: var(--on-sun); text-decoration: none; font-size: 0.88rem; font-weight: 800; text-align: center;
   transition: transform 0.08s, box-shadow 0.08s;
 }
 .action:active { transform: translateY(3px); box-shadow: 0 0 0 var(--sun-deep); }
@@ -224,9 +233,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .login form { text-align: left; margin-top: 16px; }
 .login-coin {
   width: 86px; height: 86px; margin: 0 auto 16px; border-radius: 50%; display: grid; place-items: center;
-  background: radial-gradient(circle at 32% 30%, #fff1b8, var(--sun) 55%, var(--sun-deep));
-  color: #5b3d00; font: 900 1.8rem var(--font);
-  border: 4px solid #fff; box-shadow: 0 4px 0 var(--sun-deep), 0 10px 24px rgb(224 164 0 / 35%);
+  background: radial-gradient(circle at 32% 30%, color-mix(in srgb, var(--sun) 40%, #fff), var(--sun) 55%, var(--sun-deep));
+  color: var(--on-sun); font: 900 1.8rem var(--font);
+  border: 4px solid #fff; box-shadow: 0 4px 0 var(--sun-deep), 0 10px 24px color-mix(in srgb, var(--sun-deep) 35%, transparent);
   animation: wobble 3s ease-in-out infinite;
 }
 @keyframes wobble { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg) translateY(-4px); } }
@@ -367,3 +376,16 @@ tr.frozen td { opacity: 0.5; }
 .logo-row .login-coin { margin: 0; animation: none; }
 .look-preview { background: var(--paper); border: 2px dashed var(--line); border-radius: 18px; padding: 16px; }
 .look-preview .brand { pointer-events: none; }
+
+/* ---------- Look editor: colours, words ---------- */
+.look-section { border-top: 2px dashed var(--line); padding-top: 16px; margin-top: 6px; }
+.look-section h4 { margin: 0 0 10px; font-size: 1.05rem; }
+.color-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+.color-grid input[type="color"] { padding: 4px; height: 52px; cursor: pointer; }
+.word-group { border: 2px solid var(--line); border-radius: 16px; padding: 10px 14px; background: var(--paper); }
+.word-group + .word-group { margin-top: 10px; }
+.word-group summary { cursor: pointer; font-weight: 800; padding: 4px 0; }
+.word-group .stack { margin-top: 10px; gap: 12px; }
+.word-group input.changed { border-color: var(--blue); background: var(--surface); }
+.sticky-save { position: sticky; bottom: 12px; z-index: 5; background: var(--surface); border: 2px solid var(--line);
+  border-radius: 999px; padding: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / 12%); }

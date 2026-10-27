@@ -54,7 +54,13 @@
   const plainCents = (cents) => formatCents(cents).replace(/,/g, '');
 
   const toEgpCents = (aiseCents) => aiseCents * EGP_PER_AISE;
-  const formatAise = (cents) => `AISE$ ${formatCents(cents)}`;
+  // The currency's display name. The Bank Office can rename it (e.g. "Adam Coins");
+  // only the label changes — amounts and the 1 : 10 EGP rate never do.
+  const DEFAULT_CURRENCY = 'AISE$';
+  let currency = DEFAULT_CURRENCY;
+  const setCurrency = (name) => { currency = String(name || '').trim() || DEFAULT_CURRENCY; };
+  const currencyName = () => currency;
+  const formatAise = (cents) => `${currency} ${formatCents(cents)}`;
   const formatEgp = (aiseCents) => `EGP ${formatCents(toEgpCents(aiseCents))}`;
 
   /**
@@ -69,6 +75,9 @@
 
   return {
     EGP_PER_AISE,
+    DEFAULT_CURRENCY,
+    setCurrency,
+    currencyName,
     MAX_CENTS,
     MoneyError,
     assertAmount,
